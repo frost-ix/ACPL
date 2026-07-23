@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ACPL</title>
+  <link rel="icon" type="image/png" href="../public/acl_icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+</head>
+<body class="theme-dark">
+  <div class="app-container">
+    <!-- Sidebar Controls & Dynamic Folder List -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="header-title-group">
+          <h2>⚡ AI CLI Launcher</h2>
+          <div class="subtitle">OS Shell Integration</div>
+        </div>
+        <button id="btn-toggle-sidebar" class="btn-toggle-sidebar" title="사이드바 토글">◀</button>
+      </div>
+
+      <button id="btn-add-folder" class="btn-add-folder">
+        <span>➕</span>
+        <span class="sidebar-text">작업 폴더 추가</span>
+      </button>
+
+      <!-- Dynamic Folder List -->
+      <div class="folder-list-container" id="folder-list-container">
+        <!-- Folder cards dynamically populated by renderer.js -->
+      </div>
+
+      <!-- Sidebar Footer -->
+      <div class="sidebar-footer">
+        <!-- 1. Usage Query Button -->
+        <button id="btn-check-usage" class="btn-check-usage" title="현재 계정 사용량(Quota) 확인하기">
+          <span>📊</span>
+          <span class="sidebar-text">현재 사용량 확인하기</span>
+        </button>
+
+        <!-- 2. Theme Toggle Group -->
+        <div class="theme-toggle-group">
+          <button id="btn-theme-toggle" class="btn-theme-toggle" title="테마 전환">
+            <span id="theme-icon">🌙</span>
+            <span id="theme-text" class="sidebar-text">Dark 모드</span>
+          </button>
+        </div>
+
+        <!-- 3. Status Box (Above Save Button) -->
+        <div class="status-box" title="설정 자동 보존 (AppData + 실행 경로 이중 동기화)">
+          <div class="status-indicator active"></div>
+          <span class="sidebar-text">설정 자동 동기화 중</span>
+        </div>
+
+        <!-- 4. Save Button -->
+        <button id="btn-save" class="btn-save-bottom" title="설정 저장 (directory.json)">
+          <span>💾</span>
+          <span class="sidebar-text">설정 저장 (directory.json)</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Resizer Handle -->
+    <div class="sidebar-resizer" id="sidebar-resizer"></div>
+
+    <!-- PowerShell Terminal Area -->
+    <main class="terminal-area">
+      <!-- Session Tabs Header -->
+      <header class="terminal-header">
+        <div class="session-tabs-bar" id="session-tabs-bar">
+          <!-- Session Tabs rendered dynamically -->
+        </div>
+
+        <div class="terminal-controls">
+          <button id="btn-extract-chat" class="btn-sm btn-extract" title="현재 세션의 전체 대화내용을 텍스트 파일로 순수 추출">📝 대화 추출</button>
+          <button id="btn-export-report" class="btn-sm btn-report" title="현재 대화내용을 PDF 보고서로 추출">📄 보고서 출력</button>
+        </div>
+      </header>
+
+      <!-- Active Xterm Terminal Containers Container -->
+      <div class="terminals-wrapper" id="terminals-wrapper">
+        <!-- Xterm containers dynamically created per folder session -->
+      </div>
+    </main>
+  </div>
+
+  <!-- Confirm Close Session Modal -->
+  <div id="confirm-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-icon">⚠️</div>
+      <div class="modal-title">CLI 세션 종료 확인</div>
+      <div class="modal-desc" id="modal-session-desc">실행 중인 세션을 종료하시겠습니까?</div>
+      <div class="modal-actions">
+        <button id="modal-btn-confirm" class="btn-modal-yes">종료</button>
+        <button id="modal-btn-cancel" class="btn-modal-no">취소</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

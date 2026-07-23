@@ -1,0 +1,61 @@
+{
+  "name": "ACL",
+  "version": "1.0.4",
+  "description": "ACPL - Multi-folder OS Shell Integration supporting Anthropic Claude, Antigravity, and Codex CLI",
+  "main": "main.js",
+  "scripts": {
+    "postinstall": "node scripts/copy-prebuilds.js",
+    "start": "electron .",
+    "build:exe": "node scripts/copy-prebuilds.js && electron-builder --win",
+    "build:portable": "node scripts/copy-prebuilds.js && electron-builder --win portable",
+    "build:dir": "node scripts/copy-prebuilds.js && electron-builder --win dir"
+  },
+  "keywords": [
+    "electron",
+    "powershell",
+    "claude",
+    "antigravity",
+    "codex",
+    "cli"
+  ],
+  "author": "성현우",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^34.1.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.1.0"
+  },
+  "build": {
+    "appId": "com.acpl.os-shell-launcher",
+    "productName": "ACPL",
+    "icon": "public/acl_icon.png",
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
+    "compression": "store",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "public/**/*",
+      "node_modules/node-pty/build/Release/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "public/acl_icon.png",
+      "target": [
+        "portable",
+        "dir"
+      ]
+    },
+    "portable": {
+      "artifactName": "${productName}_Portable_${version}.${ext}",
+      "requestExecutionLevel": "user"
+    }
+  }
+}
