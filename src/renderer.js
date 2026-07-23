@@ -71,12 +71,24 @@ function estimateTokensFromText(text) {
   return Math.ceil(count);
 }
 
-// Format Quota Limit Display for Tabs (e.g. "5h: 2% | Wk: 8%")
+// Format Quota Limit Display for Tabs (Supports Claude, Antigravity & Codex)
 function getQuotaDisplayText(folder) {
   if (!folder || !folder.usage) return 'Quota: 0%';
-  
-  const { sessionQuota, weekQuota, tokens } = folder.usage;
-  
+
+  const { sessionQuota, weekQuota, geminiQuota, claudeQuota, tokens } = folder.usage;
+
+  // Antigravity CLI Quota Display (Gemini & Claude/GPT groups)
+  if (typeof geminiQuota === 'number' && typeof claudeQuota === 'number') {
+    return `Gem: ${geminiQuota}% | Cld: ${claudeQuota}%`;
+  }
+  if (typeof geminiQuota === 'number') {
+    return `Gem: ${geminiQuota}%`;
+  }
+  if (typeof claudeQuota === 'number') {
+    return `Cld: ${claudeQuota}%`;
+  }
+
+  // Claude & Codex CLI Quota Display (5h Limit & Weekly Limit)
   if (typeof sessionQuota === 'number' && typeof weekQuota === 'number') {
     return `5h: ${sessionQuota}% | Wk: ${weekQuota}%`;
   }
@@ -86,7 +98,7 @@ function getQuotaDisplayText(folder) {
   if (typeof weekQuota === 'number') {
     return `Wk: ${weekQuota}%`;
   }
-  
+
   // Estimated Quota % fallback
   const estimatedPercent = Math.min(100, Math.ceil((tokens / 200000) * 100));
   return `Quota: ${estimatedPercent}%`;
@@ -538,6 +550,19 @@ function removeFolderCard(folderId) {
   debouncedSaveConfig();
 }
 
+function getUsageCheckCommand(cli) {
+  switch (cli) {
+    case 'claude':
+      return '/usage\r\n';
+    case 'antigravity':
+      return '/usage\r\n';
+    case 'codex':
+      return '/status\r\n';
+    default:
+      return '/usage\r\n';
+  }
+}
+
 // --- Trigger Manual / Auto Usage Check & Auto ESC Cancel Return ---
 function triggerUsageCheckForSession(sessionId, isManual = false) {
   if (!sessionId) return;
@@ -552,12 +577,13 @@ function triggerUsageCheckForSession(sessionId, isManual = false) {
 
   isCheckingUsageMap[sessionId] = true;
 
-  window.api.writePty({ sessionId, data: '/usage\r\n' });
+  const cmd = getUsageCheckCommand(folder.cli);
+  window.api.writePty({ sessionId, data: cmd });
 
   setTimeout(() => {
     window.api.writePty({ sessionId, data: '\x1b' });
     isCheckingUsageMap[sessionId] = false;
-  }, 700);
+  }, 750);
 }
 
 function triggerManualUsageCheck() {
@@ -860,41 +886,84 @@ window.api.onPtyData(({ sessionId, data }) => {
     
     const cleanData = data.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
 
-    // 1. Current Session 5h Limit % Parsing
+    // CLI-specific Quota Parsers
+
+    // 1. Antigravity Models & Quota Parser (/usage)
+    if (folder.cli === 'antigravity') {
+      const geminiMatch = cleanData.match(/GEMINI\s*MODELS[\s\S]*?Weekly\s*Limit[\s\S]*?([0-9.]+)\s*%/i);
+      if (geminiMatch && geminiMatch[1]) {
+        folder.usage.geminiQuota = Math.round(parseFloat(geminiMatch[1]));
+      }
+
+      const claudeGptMatch = cleanData.match(/CLAUDE\s*(?:AND|&)\s*GPT\s*MODELS[\s\S]*?Weekly\s*Limit[\s\S]*?([0-9.]+)\s*%/i);
+      if (claudeGptMatch && claudeGptMatch[1]) {
+        folder.usage.claudeQuota = Math.round(parseFloat(claudeGptMatch[1]));
+      }
+    }
+
+    // 2. Codex Usage Limits Parser (/status)
+    if (folder.cli === 'codex') {
+      const codex5h = cleanData.match(/5h\s*limit\s*:\s*\[[^\]]*\]\s*([0-9]{1,3})%\s*used/i);
+      if (codex5h && codex5h[1]) {
+        folder.usage.sessionQuota = parseInt(codex5h[1], 10);
+      }
+
+      const codexWk = cleanData.match(/Weekly\s*limit\s*:\s*\[[^\]]*\]\s*([0-9]{1,3})%\s*used/i);
+      if (codexWk && codexWk[1]) {
+        folder.usage.weekQuota = parseInt(codexWk[1], 10);
+      }
+    }
+
+    // 3. Claude Session & Weekly Quota Parser (/usage)
     const sessionMatch = cleanData.match(/(?:5시간\s*한도|Current\s*session)[^0-9]*([0-9]{1,3})%/i);
     if (sessionMatch && sessionMatch[1]) {
       folder.usage.sessionQuota = parseInt(sessionMatch[1], 10);
     }
 
-    // 2. Current Week All models % Parsing
     const weekMatch = cleanData.match(/(?:주간\s*·?\s*전체\s*모델|Current\s*week\s*\(All\s*models\)|Current\s*week)[^0-9]*([0-9]{1,3})%/i);
     if (weekMatch && weekMatch[1]) {
       folder.usage.weekQuota = parseInt(weekMatch[1], 10);
     }
 
     // Generic % parser fallback
-    if (folder.usage.sessionQuota === null && folder.usage.weekQuota === null) {
-      const genericMatch = cleanData.match(/([0-9]{1,3})%\s*(?:한도|사용량|quota|limit)/i);
+    if (folder.usage.sessionQuota === null && folder.usage.weekQuota === null && folder.usage.geminiQuota === undefined) {
+      const genericMatch = cleanData.match(/([0-9]{1,3})%\s*(?:한도|사용량|quota|limit|used)/i);
       if (genericMatch && genericMatch[1]) {
         folder.usage.sessionQuota = parseInt(genericMatch[1], 10);
       }
     }
 
-    // 3. Event-driven automatic usage check trigger upon Claude Code completion load (independent of PC hardware speed)
-    if (folder.cli === 'claude' && !hasAutoCheckedUsageMap[sessionId] && !isCheckingUsageMap[sessionId]) {
-      const isClaudeLoaded = /Claude\s*Code\s*v/i.test(cleanData) ||
-                             /Welcome\s*back/i.test(cleanData) ||
-                             /Tips\s*for\s*getting\s*started/i.test(cleanData) ||
-                             /shift\+tab\s*to\s*cycle/i.test(cleanData) ||
-                             /plan\s*mode/i.test(cleanData);
+    // Event-driven automatic usage check trigger upon CLI completion load (independent of PC hardware speed)
+    if (!hasAutoCheckedUsageMap[sessionId] && !isCheckingUsageMap[sessionId]) {
+      let isCliLoaded = false;
 
-      if (isClaudeLoaded) {
+      if (folder.cli === 'claude') {
+        isCliLoaded = /Claude\s*Code\s*v/i.test(cleanData) ||
+                      /Welcome\s*back/i.test(cleanData) ||
+                      /Tips\s*for\s*getting\s*started/i.test(cleanData) ||
+                      /shift\+tab\s*to\s*cycle/i.test(cleanData) ||
+                      /plan\s*mode/i.test(cleanData);
+      } else if (folder.cli === 'antigravity') {
+        isCliLoaded = /antigravity/i.test(cleanData) ||
+                      /Models\s*&\s*Quota/i.test(cleanData) ||
+                      /GEMINI\s*MODELS/i.test(cleanData) ||
+                      /AGY/i.test(cleanData);
+      } else if (folder.cli === 'codex') {
+        isCliLoaded = /codex/i.test(cleanData) ||
+                      /Token\s*Usage/i.test(cleanData) ||
+                      /Usage\s*Limits/i.test(cleanData) ||
+                      /5h\s*limit/i.test(cleanData);
+      } else {
+        isCliLoaded = cleanData.length > 50;
+      }
+
+      if (isCliLoaded) {
         hasAutoCheckedUsageMap[sessionId] = true;
         setTimeout(() => {
           if (folder.isActive && !isCheckingUsageMap[sessionId]) {
             triggerUsageCheckForSession(sessionId, false);
           }
-        }, 350);
+        }, 400);
       }
     }
 
