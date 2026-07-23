@@ -463,8 +463,28 @@ async function launchFolderSession(folderId) {
     if (!folder.usage) folder.usage = { tokens: 0, cost: 0.0, sessionQuota: null, weekQuota: null };
     inst.isSpawned = true;
 
-    // Reset automatic usage check flag for event-driven detection upon Claude Code load
+    // Reset automatic usage check flag for event-driven detection
     hasAutoCheckedUsageMap[folderId] = false;
+
+    // Guaranteed Backup Timeouts for Usage Check (Handles slower CLI load times / sign ins)
+    const scheduleBackupCheck = (delayMs) => {
+      setTimeout(() => {
+        if (!folder.isActive) return;
+        const hasParsedQuota = folder.usage && (
+          typeof folder.usage.sessionQuota === 'number' ||
+          typeof folder.usage.weekQuota === 'number' ||
+          typeof folder.usage.geminiQuota === 'number' ||
+          typeof folder.usage.claudeQuota === 'number'
+        );
+        if (!hasParsedQuota && !isCheckingUsageMap[folderId]) {
+          hasAutoCheckedUsageMap[folderId] = true;
+          triggerUsageCheckForSession(folderId, false);
+        }
+      }, delayMs);
+    };
+
+    scheduleBackupCheck(4000);
+    scheduleBackupCheck(7500);
   } else {
     folder.isActive = false;
     inst.term.write(`\x1b[31m[세션 실행 실패: ${result.error}]\x1b[0m\r\n`);
@@ -550,19 +570,6 @@ function removeFolderCard(folderId) {
   debouncedSaveConfig();
 }
 
-function getUsageCheckCommand(cli) {
-  switch (cli) {
-    case 'claude':
-      return '/usage\r\n';
-    case 'antigravity':
-      return '/usage\r\n';
-    case 'codex':
-      return '/status\r\n';
-    default:
-      return '/usage\r\n';
-  }
-}
-
 // --- Trigger Manual / Auto Usage Check & Auto ESC Cancel Return ---
 function triggerUsageCheckForSession(sessionId, isManual = false) {
   if (!sessionId) return;
@@ -577,13 +584,23 @@ function triggerUsageCheckForSession(sessionId, isManual = false) {
 
   isCheckingUsageMap[sessionId] = true;
 
-  const cmd = getUsageCheckCommand(folder.cli);
-  window.api.writePty({ sessionId, data: cmd });
+  const rawCmd = (folder.cli === 'codex') ? '/status' : '/usage';
+
+  // 1. Send command text first
+  window.api.writePty({ sessionId, data: rawCmd });
+
+  // 2. Send Enter (\r) after 100ms delay so TUI accepts the submission
+  setTimeout(() => {
+    window.api.writePty({ sessionId, data: '\r' });
+  }, 100);
+
+  // 3. Send ESC (\x1b) after delay to close TUI overlay cleanly after rendering
+  const delay = (folder.cli === 'antigravity' || folder.cli === 'codex') ? 1400 : 900;
 
   setTimeout(() => {
     window.api.writePty({ sessionId, data: '\x1b' });
     isCheckingUsageMap[sessionId] = false;
-  }, 750);
+  }, delay);
 }
 
 function triggerManualUsageCheck() {
@@ -888,16 +905,24 @@ window.api.onPtyData(({ sessionId, data }) => {
 
     // CLI-specific Quota Parsers
 
-    // 1. Antigravity Models & Quota Parser (/usage)
+    // 1. Antigravity Models & Quota Parser (/usage - Reverse Remaining % to Used % so it starts from 0% like Claude)
     if (folder.cli === 'antigravity') {
       const geminiMatch = cleanData.match(/GEMINI\s*MODELS[\s\S]*?Weekly\s*Limit[\s\S]*?([0-9.]+)\s*%/i);
       if (geminiMatch && geminiMatch[1]) {
-        folder.usage.geminiQuota = Math.round(parseFloat(geminiMatch[1]));
+        const remaining = parseFloat(geminiMatch[1]);
+        folder.usage.geminiQuota = Math.max(0, Math.min(100, Math.round(100 - remaining)));
+      } else {
+        const gemRem = cleanData.match(/([0-9.]+)\s*%\s*remaining/i);
+        if (gemRem && gemRem[1]) {
+          const remaining = parseFloat(gemRem[1]);
+          folder.usage.geminiQuota = Math.max(0, Math.min(100, Math.round(100 - remaining)));
+        }
       }
 
       const claudeGptMatch = cleanData.match(/CLAUDE\s*(?:AND|&)\s*GPT\s*MODELS[\s\S]*?Weekly\s*Limit[\s\S]*?([0-9.]+)\s*%/i);
       if (claudeGptMatch && claudeGptMatch[1]) {
-        folder.usage.claudeQuota = Math.round(parseFloat(claudeGptMatch[1]));
+        const remaining = parseFloat(claudeGptMatch[1]);
+        folder.usage.claudeQuota = Math.max(0, Math.min(100, Math.round(100 - remaining)));
       }
     }
 
@@ -933,37 +958,49 @@ window.api.onPtyData(({ sessionId, data }) => {
       }
     }
 
-    // Event-driven automatic usage check trigger upon CLI completion load (independent of PC hardware speed)
+    // Event-driven automatic usage check trigger upon CLI completion load (signing in aware)
     if (!hasAutoCheckedUsageMap[sessionId] && !isCheckingUsageMap[sessionId]) {
+      const isSigningIn = /signing\s*in/i.test(cleanData) || /authenticating/i.test(cleanData);
       let isCliLoaded = false;
 
-      if (folder.cli === 'claude') {
-        isCliLoaded = /Claude\s*Code\s*v/i.test(cleanData) ||
-                      /Welcome\s*back/i.test(cleanData) ||
-                      /Tips\s*for\s*getting\s*started/i.test(cleanData) ||
-                      /shift\+tab\s*to\s*cycle/i.test(cleanData) ||
-                      /plan\s*mode/i.test(cleanData);
-      } else if (folder.cli === 'antigravity') {
-        isCliLoaded = /antigravity/i.test(cleanData) ||
-                      /Models\s*&\s*Quota/i.test(cleanData) ||
-                      /GEMINI\s*MODELS/i.test(cleanData) ||
-                      /AGY/i.test(cleanData);
-      } else if (folder.cli === 'codex') {
-        isCliLoaded = /codex/i.test(cleanData) ||
-                      /Token\s*Usage/i.test(cleanData) ||
-                      /Usage\s*Limits/i.test(cleanData) ||
-                      /5h\s*limit/i.test(cleanData);
-      } else {
-        isCliLoaded = cleanData.length > 50;
+      if (!isSigningIn) {
+        if (folder.cli === 'claude') {
+          isCliLoaded = /Claude\s*Code\s*v/i.test(cleanData) ||
+                        /Welcome\s*back/i.test(cleanData) ||
+                        /Tips\s*for\s*getting\s*started/i.test(cleanData) ||
+                        /shift\+tab\s*to\s*cycle/i.test(cleanData) ||
+                        /plan\s*mode/i.test(cleanData);
+        } else if (folder.cli === 'antigravity') {
+          // Exclude command echo 'agy' matching: only trigger on CLI prompt/banner strings
+          isCliLoaded = /Antigravity\s*CLI/i.test(cleanData) ||
+                        /Google\s*AI/i.test(cleanData) ||
+                        /Gemini\s*3\./i.test(cleanData) ||
+                        /\?\s*for\s*shortcuts/i.test(cleanData) ||
+                        /Models\s*&\s*Quota/i.test(cleanData) ||
+                        /GEMINI\s*MODELS/i.test(cleanData) ||
+                        /type\s*\/[a-z]+/i.test(cleanData);
+        } else if (folder.cli === 'codex') {
+          isCliLoaded = /OpenAI\s*Codex/i.test(cleanData) ||
+                        /To\s*get\s*started/i.test(cleanData) ||
+                        /\/status\s*–/i.test(cleanData) ||
+                        /\/approvals/i.test(cleanData) ||
+                        /Token\s*Usage/i.test(cleanData) ||
+                        /Usage\s*Limits/i.test(cleanData) ||
+                        /5h\s*limit/i.test(cleanData);
+        } else {
+          isCliLoaded = cleanData.length > 50;
+        }
       }
 
       if (isCliLoaded) {
         hasAutoCheckedUsageMap[sessionId] = true;
+        // Wait for CLI interactive TUI prompt to finish loading event listeners
+        const initDelay = (folder.cli === 'antigravity' || folder.cli === 'codex') ? 1500 : 800;
         setTimeout(() => {
           if (folder.isActive && !isCheckingUsageMap[sessionId]) {
             triggerUsageCheckForSession(sessionId, false);
           }
-        }, 400);
+        }, initDelay);
       }
     }
 
