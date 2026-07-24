@@ -335,7 +335,7 @@ function createTerminalInstance(folderId) {
     cursorBlink: true,
     fontFamily: 'Consolas, "Courier New", monospace',
     fontSize: 14,
-    scrollback: 1000,
+    scrollback: 100000,
     theme: {
       background: '#090d16',
       foreground: '#f8fafc',
@@ -368,6 +368,7 @@ function createTerminalInstance(folderId) {
     fitAddon,
     isSpawned: false,
     container: termContainer,
+    sessionRawText: '',
   };
 
   if (window.ResizeObserver) {
@@ -442,6 +443,7 @@ async function launchFolderSession(folderId) {
   const commandToRun = getCommandToRun(folder.cli, folder.customCommand);
 
   inst.term.clear();
+  inst.sessionRawText = '';
   inst.term.write(`\x1b[32m[PowerShell 세션 시작 중...]\x1b[0m\r\n`);
   inst.term.write(`\x1b[36m경로: ${folder.path}\x1b[0m\r\n`);
   if (commandToRun) {
@@ -650,18 +652,35 @@ async function exportConversationReportPDF() {
   }, 60);
 }
 
-// Extract raw text from xterm buffer active lines
+// Extract raw text from xterm buffer (all lines since shell session opened)
 function getTerminalBufferText(folderId) {
   const inst = termInstances[folderId];
-  if (!inst || !inst.term) return '';
+  if (!inst) return '';
 
-  const buffer = inst.term.buffer.active;
   let textLines = [];
-  for (let i = 0; i < buffer.length; i++) {
-    const line = buffer.getLine(i);
-    if (line) {
-      textLines.push(line.translateToString(true));
+
+  if (inst.term && inst.term.buffer) {
+    const buffer = inst.term.buffer.normal || inst.term.buffer.active;
+    if (buffer) {
+      for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        if (!line) continue;
+
+        const lineStr = line.translateToString(true);
+
+        // Handle line wrapping: concatenate continuation lines without extra newlines
+        if (line.isWrapped && textLines.length > 0) {
+          textLines[textLines.length - 1] += lineStr;
+        } else {
+          textLines.push(lineStr);
+        }
+      }
     }
+  }
+
+  // Clean leading blank lines
+  while (textLines.length > 0 && textLines[0].trim() === '') {
+    textLines.shift();
   }
 
   // Clean trailing blank lines
@@ -669,7 +688,22 @@ function getTerminalBufferText(folderId) {
     textLines.pop();
   }
 
-  return textLines.join('\n');
+  let result = textLines.join('\n');
+
+  // Fallback to accumulated sessionRawText (with ANSI escape codes stripped) if buffer text is empty
+  if (!result.trim() && inst.sessionRawText) {
+    result = inst.sessionRawText
+      .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n');
+
+    const rawLines = result.split('\n');
+    while (rawLines.length > 0 && rawLines[0].trim() === '') rawLines.shift();
+    while (rawLines.length > 0 && rawLines[rawLines.length - 1].trim() === '') rawLines.pop();
+    result = rawLines.join('\n');
+  }
+
+  return result;
 }
 
 // --- Export Raw Chat Conversation Content to Specified Folder ---
@@ -893,8 +927,13 @@ function debouncedRenderSessionTabs() {
 
 window.api.onPtyData(({ sessionId, data }) => {
   const inst = termInstances[sessionId];
-  if (inst && inst.term) {
-    inst.term.write(data);
+  if (inst) {
+    if (inst.term) inst.term.write(data);
+    if (typeof inst.sessionRawText === 'string') {
+      inst.sessionRawText += data;
+    } else {
+      inst.sessionRawText = data;
+    }
   }
 
   const folder = folders.find((f) => f.id === sessionId);
