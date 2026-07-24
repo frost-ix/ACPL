@@ -54,4 +54,5 @@ npm run build:exe
 ## 개발자 정보
 
 - **제작**: frost-ix
+- **GitHub**: https://github.com/frost-ix
 - **문의/개선 의견**: 이슈 또는 프로젝트 리포지토리를 통해 전달해 주세요.

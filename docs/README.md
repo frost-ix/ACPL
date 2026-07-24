@@ -54,4 +54,5 @@ Once the build finishes, packaged executable files will be generated in the `dis
 ## Developer Info
 
 - **Author**: frost-ix
+- **GitHub**: https://github.com/frost-ix
 - **Inquiries / Feedback**: Please submit via Issues or the Repository.

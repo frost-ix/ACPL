@@ -84,7 +84,7 @@ const i18n = {
     welcomeNote: '📌 <strong>참고사항:</strong> claude가 제대로 구동되지 않는다면 환경변수 PATH에 <code>%USERPROFILE%\\.local\\bin</code> 경로를 추가해주세요.',
     welcomeTip: '💡 <strong>📝 대화 추출 & 📄 보고서 출력 기능:</strong><br> [📝 대화 추출] 버튼을 누르면 AI 호출 없이 현재 화면 텍스트 원문을 즉시 .md 파일로 추출 저장하며, <br>[📄 보고서 출력]은 대화 요약 PDF 문서를 자동 생성합니다.',
     welcomeFooter: '▶ 준비가 되시면 폴더 카드의 [▶ 실행] 버튼을 눌러 세션을 시작하세요!',
-    welcomeCredits: '[제작 : 성현우]'
+    welcomeCredits: '[제작 : 성현우 | GitHub: https://github.com/frost-ix]'
   },
   en: {
     sidebarTitle: '⚡ AI CLI Launcher',
@@ -157,7 +157,7 @@ const i18n = {
     welcomeNote: '📌 <strong>Note:</strong> If Claude fails to run, add <code>%USERPROFILE%\\.local\\bin</code> to your PATH environment variable.',
     welcomeTip: '💡 <strong>📝 Extract Chat & 📄 Export Report:</strong><br> [📝 Extract Chat] instantly exports current terminal buffer text into a .md file without AI calls, while <br>[📄 Export Report] generates a PDF document summary.',
     welcomeFooter: '▶ When ready, click [▶ Run] on a folder card to launch a session!',
-    welcomeCredits: '[Author: Seong Hyunwoo]'
+    welcomeCredits: '[Author: Sung Hyunwoo | GitHub: https://github.com/frost-ix]'
   }
 };
 
