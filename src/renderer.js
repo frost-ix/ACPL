@@ -652,7 +652,7 @@ async function exportConversationReportPDF() {
   }, 60);
 }
 
-// Extract raw text from xterm buffer (all lines since shell session opened)
+// Extract raw text from xterm buffer (all lines since CLI session opened, excluding PowerShell startup headers)
 function getTerminalBufferText(folderId) {
   const inst = termInstances[folderId];
   if (!inst) return '';
@@ -678,32 +678,53 @@ function getTerminalBufferText(folderId) {
     }
   }
 
-  // Clean leading blank lines
-  while (textLines.length > 0 && textLines[0].trim() === '') {
-    textLines.shift();
-  }
-
-  // Clean trailing blank lines
-  while (textLines.length > 0 && textLines[textLines.length - 1].trim() === '') {
-    textLines.pop();
-  }
-
-  let result = textLines.join('\n');
+  let resultLines = textLines;
 
   // Fallback to accumulated sessionRawText (with ANSI escape codes stripped) if buffer text is empty
-  if (!result.trim() && inst.sessionRawText) {
-    result = inst.sessionRawText
+  if (resultLines.length === 0 && inst.sessionRawText) {
+    const cleanRaw = inst.sessionRawText
       .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
       .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n');
-
-    const rawLines = result.split('\n');
-    while (rawLines.length > 0 && rawLines[0].trim() === '') rawLines.shift();
-    while (rawLines.length > 0 && rawLines[rawLines.length - 1].trim() === '') rawLines.pop();
-    result = rawLines.join('\n');
+    resultLines = cleanRaw.split('\n');
   }
 
-  return result;
+  // Filter out PowerShell startup headers & launch command prompts so extraction starts strictly when CLI opens
+  let cliStartIndex = 0;
+  for (let i = 0; i < resultLines.length; i++) {
+    const trimmed = resultLines[i].trim();
+
+    const isPowerShellStartup =
+      trimmed.includes('[PowerShell 세션 시작 중...]') ||
+      trimmed.startsWith('경로:') ||
+      trimmed.startsWith('실행 명령어:') ||
+      trimmed.includes('Windows PowerShell') ||
+      trimmed.includes('Copyright (C) Microsoft Corporation') ||
+      trimmed.includes('All rights reserved.') ||
+      trimmed.includes('Try the new cross-platform PowerShell') ||
+      trimmed.includes('Install the latest PowerShell') ||
+      /^PS\s+[A-Za-z]:\\.*?>/i.test(trimmed);
+
+    if (isPowerShellStartup) {
+      cliStartIndex = i + 1;
+    } else if (trimmed.length > 0) {
+      break;
+    }
+  }
+
+  let filteredLines = resultLines.slice(cliStartIndex);
+
+  // Clean leading blank lines
+  while (filteredLines.length > 0 && filteredLines[0].trim() === '') {
+    filteredLines.shift();
+  }
+
+  // Clean trailing blank lines
+  while (filteredLines.length > 0 && filteredLines[filteredLines.length - 1].trim() === '') {
+    filteredLines.pop();
+  }
+
+  return filteredLines.join('\n');
 }
 
 // --- Export Raw Chat Conversation Content to Specified Folder ---

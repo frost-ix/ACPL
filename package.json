@@ -1,6 +1,6 @@
 {
   "name": "ACL",
-  "version": "1.0.4",
+  "version": "1.0.1",
   "description": "ACPL - Multi-folder OS Shell Integration supporting Anthropic Claude, Antigravity, and Codex CLI",
   "main": "main.js",
   "scripts": {
@@ -54,7 +54,7 @@
       ]
     },
     "portable": {
-      "artifactName": "${productName}_Portable_${version}.${ext}",
+      "artifactName": "${productName}.${ext}",
       "requestExecutionLevel": "user"
     }
   }
