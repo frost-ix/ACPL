@@ -3,12 +3,167 @@ let folders = []; // [{ id, path, alias, cli, customCommand, isActive: false, us
 let activeFolderId = null;
 let pendingCloseFolderId = null;
 let currentTheme = 'dark';
+let currentLang = 'ko';
 
 // Map of xterm instances: { [folderId]: { term, fitAddon, isSpawned, container } }
 const termInstances = {};
 
 // Welcome manual HTML element instance
 let welcomeContainerInstance = null;
+
+// i18n Translation Dictionary
+const i18n = {
+  ko: {
+    sidebarTitle: '⚡ AI CLI Launcher',
+    sidebarSubtitle: 'OS Shell Integration',
+    toggleSidebarTitle: '사이드바 토글',
+    addFolder: '작업 폴더 추가',
+    checkUsage: '현재 사용량 확인하기',
+    checkUsageTitle: '현재 계정 사용량(Quota) 확인하기',
+    darkTheme: 'Dark 모드',
+    lightTheme: 'Light 모드',
+    themeToggleTitle: '테마 전환',
+    langSelectTitle: '언어 변경 / Language',
+    statusSyncing: '설정 자동 동기화 중',
+    statusSyncTitle: '설정 자동 보존 (AppData + 실행 경로 이중 동기화)',
+    saveConfigBtn: '설정 저장 (directory.json)',
+    saveConfigTitle: '설정 저장 (directory.json)',
+    extractChatBtn: '📝 대화 추출',
+    extractChatTitle: '현재 세션의 전체 대화내용을 텍스트 파일로 순수 추출',
+    reportPdfBtn: '📄 보고서 출력',
+    reportPdfTitle: '현재 대화내용을 PDF 보고서로 추출',
+
+    // Folder card
+    aliasPlaceholder: '🏷️ 별칭 지정 (선택)',
+    customCmdPlaceholder: '예: claude --verbose',
+    customInputLabel: '직접 입력',
+    launchBtn: '▶ 실행',
+    launchBtnTitle: '이 위치에서 CLI 세션 시작',
+    runningStatus: '● 실행 중',
+    closeBtn: '⏹ 닫기',
+    closeBtnTitleActive: '세션 닫기',
+    closeBtnTitleDisabled: '실행 중인 세션 없음',
+    deleteFolderTitle: '목록에서 삭제',
+    sessionActiveDot: '세션 활성화 중 (초록색)',
+    sessionInactiveDot: '세션 비활성화됨 (회색)',
+
+    // Session Tabs
+    welcomeTab: '사용 안내',
+
+    // Modal
+    modalCloseTitle: 'CLI 세션 종료 확인',
+    modalCloseDesc: '실행 중인 세션을 종료하시겠습니까?',
+    modalConfirm: '종료',
+    modalCancel: '취소',
+
+    // Alerts / Messages
+    noActiveSession: '현재 실행 중인 세션이 없습니다.',
+    sessionNotActive: '현재 선택된 세션이 실행 중이지 않습니다. 세션을 먼저 시작해 주세요.',
+    noActiveSessionStartFirst: '활성화된 세션이 없습니다. 실행(▶) 버튼을 먼저 눌러 세션을 연결해 주세요.',
+    noActiveSessionForReport: '활성화된 세션이 없습니다. 먼저 폴더 카드의 [▶ 실행] 버튼을 눌러 세션을 연결해 주세요.',
+    noContentToExtract: '현재 세션에 추출할 대화 내용이 없습니다.',
+    chatSavedSuccess: '현재 세션 대화 내용이 .md 파일로 저장되었습니다!\n\n저장 위치:\n',
+    chatSavedError: '대화 추출 저장 중 오류가 발생했습니다: ',
+    configSaveSuccess: '사용자 설정(directory.json)이 성공적으로 이중 보존되었습니다!\n\n저장 위치:\n',
+    configSaveError: '설정 저장 중 오류가 발생했습니다.\n',
+
+    // PTY start messages
+    startingSession: 'PowerShell 세션 시작 중...',
+    pathLabel: '경로',
+    commandLabel: '실행 명령어',
+    sessionLaunchFailed: '세션 실행 실패: ',
+
+    // Welcome Manual
+    welcomeHeader: 'ACL - 사용 안내 매뉴얼',
+    welcomeStep1: '좌측 <span class="welcome-highlight">[➕ 작업 폴더 추가]</span> 버튼을 눌러 프로젝트 디렉토리를 등록합니다.',
+    welcomeStep2: '원하는 AI CLI <span class="welcome-highlight">(Claude / Antigravity / Codex / Etc..)</span>를 선택합니다.',
+    welcomeStep3: '폴더 카드의 <span class="welcome-highlight">[▶ 실행]</span> 버튼을 눌러 대화형 세션을 시작합니다.',
+    welcomeStep4: '하단 <span class="welcome-highlight">[📊 현재 사용량 확인하기]</span> 버튼으로 플랜 한도(Quota %)를 실시간 체크합니다.',
+    welcomeStep5: '상단 <span class="welcome-highlight">[📝 대화 추출]</span> / <span class="welcome-highlight">[📄 보고서 출력]</span> 버튼으로 대화 원문이나 PDF 보고서를 지정 폴더로 자동 저장합니다.',
+    welcomeStep6: '하단 <span class="welcome-highlight">[🎨 테마 / 🌐 언어]</span> 설정으로 테마와 언어를 바꿀 수 있습니다 (터미널은 다크 고정).',
+    welcomeNote: '📌 <strong>참고사항:</strong> claude가 제대로 구동되지 않는다면 환경변수 PATH에 <code>%USERPROFILE%\\.local\\bin</code> 경로를 추가해주세요.',
+    welcomeTip: '💡 <strong>📝 대화 추출 & 📄 보고서 출력 기능:</strong><br> [📝 대화 추출] 버튼을 누르면 AI 호출 없이 현재 화면 텍스트 원문을 즉시 .md 파일로 추출 저장하며, <br>[📄 보고서 출력]은 대화 요약 PDF 문서를 자동 생성합니다.',
+    welcomeFooter: '▶ 준비가 되시면 폴더 카드의 [▶ 실행] 버튼을 눌러 세션을 시작하세요!',
+    welcomeCredits: '[제작 : 성현우]'
+  },
+  en: {
+    sidebarTitle: '⚡ AI CLI Launcher',
+    sidebarSubtitle: 'OS Shell Integration',
+    toggleSidebarTitle: 'Toggle Sidebar',
+    addFolder: 'Add Folder',
+    checkUsage: 'Check Usage',
+    checkUsageTitle: 'Check current account quota usage',
+    darkTheme: 'Dark Mode',
+    lightTheme: 'Light Mode',
+    themeToggleTitle: 'Toggle Theme',
+    langSelectTitle: 'Language / 언어 변경',
+    statusSyncing: 'Auto-syncing config',
+    statusSyncTitle: 'Auto-sync Config (AppData + Executable Path)',
+    saveConfigBtn: 'Save Settings',
+    saveConfigTitle: 'Save Settings',
+    extractChatBtn: '📝 Extract Chat',
+    extractChatTitle: 'Extract full conversation of current session as raw text file',
+    reportPdfBtn: '📄 Export Report',
+    reportPdfTitle: 'Export current conversation as PDF report',
+
+    // Folder card
+    aliasPlaceholder: '🏷️ Alias (Optional)',
+    customCmdPlaceholder: 'e.g. claude --verbose',
+    customInputLabel: 'Custom input',
+    launchBtn: '▶ Run',
+    launchBtnTitle: 'Start CLI Session in this directory',
+    runningStatus: '● Running',
+    closeBtn: '⏹ Stop',
+    closeBtnTitleActive: 'Stop session',
+    closeBtnTitleDisabled: 'No running session',
+    deleteFolderTitle: 'Delete from list',
+    sessionActiveDot: 'Session active (Green)',
+    sessionInactiveDot: 'Session inactive (Gray)',
+
+    // Session Tabs
+    welcomeTab: 'User Guide',
+
+    // Modal
+    modalCloseTitle: 'Confirm Session Termination',
+    modalCloseDesc: 'Are you sure you want to terminate the running CLI session?',
+    modalConfirm: 'Terminate',
+    modalCancel: 'Cancel',
+
+    // Alerts / Messages
+    noActiveSession: 'There are no active sessions running.',
+    sessionNotActive: 'The selected session is not active. Please start the session first.',
+    noActiveSessionStartFirst: 'No active session. Please click the [▶ Run] button first to connect a session.',
+    noActiveSessionForReport: 'No active session. Please click the [▶ Run] button on a folder card to connect a session.',
+    noContentToExtract: 'No conversation text available to extract in the current session.',
+    chatSavedSuccess: 'Current session conversation log has been saved as a .md file!\n\nSaved at:\n',
+    chatSavedError: 'An error occurred while saving conversation log: ',
+    configSaveSuccess: 'User settings (directory.json) have been saved successfully!\n\nSaved at:\n',
+    configSaveError: 'An error occurred while saving settings.\n',
+
+    // PTY start messages
+    startingSession: 'Starting PowerShell Session...',
+    pathLabel: 'Path',
+    commandLabel: 'Command',
+    sessionLaunchFailed: 'Session Launch Failed: ',
+
+    // Welcome Manual
+    welcomeHeader: 'ACL - User Guide',
+    welcomeStep1: 'Click the left <span class="welcome-highlight">[➕ Add Folder]</span> button to register project directories.',
+    welcomeStep2: 'Select your preferred AI CLI <span class="welcome-highlight">(Claude / Antigravity / Codex / Etc..)</span>.',
+    welcomeStep3: 'Click the <span class="welcome-highlight">[▶ Run]</span> button on the folder card to start an interactive session.',
+    welcomeStep4: 'Use the bottom <span class="welcome-highlight">[📊 Check Usage]</span> button to monitor plan quotas (Quota %) in real time.',
+    welcomeStep5: 'Use the top <span class="welcome-highlight">[📝 Extract Chat]</span> / <span class="welcome-highlight">[📄 Export Report]</span> buttons to save raw chat or PDF reports.',
+    welcomeStep6: 'Customize appearance and language using the bottom <span class="welcome-highlight">[🎨 Theme / 🌐 Language]</span> controls.',
+    welcomeNote: '📌 <strong>Note:</strong> If Claude fails to run, add <code>%USERPROFILE%\\.local\\bin</code> to your PATH environment variable.',
+    welcomeTip: '💡 <strong>📝 Extract Chat & 📄 Export Report:</strong><br> [📝 Extract Chat] instantly exports current terminal buffer text into a .md file without AI calls, while <br>[📄 Export Report] generates a PDF document summary.',
+    welcomeFooter: '▶ When ready, click [▶ Run] on a folder card to launch a session!',
+    welcomeCredits: '[Author: Seong Hyunwoo]'
+  }
+};
+
+function t(key) {
+  return (i18n[currentLang] && i18n[currentLang][key]) || (i18n['ko'][key] || key);
+}
 
 // Debounce & Animation Frame Timers
 let resizeDebounceTimer = null;
@@ -121,6 +276,7 @@ const btnExtractChat = document.getElementById('btn-extract-chat');
 const btnThemeToggle = document.getElementById('btn-theme-toggle');
 const themeIcon = document.getElementById('theme-icon');
 const themeText = document.getElementById('theme-text');
+const selectLang = document.getElementById('select-lang');
 
 // Modal Elements
 const confirmModal = document.getElementById('confirm-modal');
@@ -164,10 +320,10 @@ function applyTheme(theme) {
 
   if (currentTheme === 'light') {
     themeIcon.textContent = '☀️';
-    themeText.textContent = 'Light 모드';
+    themeText.textContent = t('lightTheme');
   } else {
     themeIcon.textContent = '🌙';
-    themeText.textContent = 'Dark 모드';
+    themeText.textContent = t('darkTheme');
   }
 
   const darkThemeOptions = {
@@ -192,10 +348,69 @@ function toggleTheme() {
   saveAllConfig();
 }
 
+function updateUILanguage() {
+  const btnAddFolderSpan = btnAddFolder ? btnAddFolder.querySelector('.sidebar-text') : null;
+  if (btnAddFolderSpan) btnAddFolderSpan.textContent = t('addFolder');
+
+  if (btnCheckUsage) {
+    const btnCheckUsageSpan = btnCheckUsage.querySelector('.sidebar-text');
+    if (btnCheckUsageSpan) btnCheckUsageSpan.textContent = t('checkUsage');
+    btnCheckUsage.title = t('checkUsageTitle');
+  }
+
+  if (themeText) {
+    themeText.textContent = currentTheme === 'dark' ? t('darkTheme') : t('lightTheme');
+  }
+  if (btnThemeToggle) btnThemeToggle.title = t('themeToggleTitle');
+
+  if (selectLang) {
+    selectLang.value = currentLang;
+    selectLang.title = t('langSelectTitle');
+  }
+
+  const statusBoxSpan = document.querySelector('.status-box .sidebar-text');
+  if (statusBoxSpan) statusBoxSpan.textContent = t('statusSyncing');
+  const statusBox = document.querySelector('.status-box');
+  if (statusBox) statusBox.title = t('statusSyncTitle');
+
+  if (btnSave) {
+    const btnSaveSpan = btnSave.querySelector('.sidebar-text');
+    if (btnSaveSpan) btnSaveSpan.textContent = t('saveConfigBtn');
+    btnSave.title = t('saveConfigTitle');
+  }
+
+  if (btnExtractChat) {
+    btnExtractChat.textContent = t('extractChatBtn');
+    btnExtractChat.title = t('extractChatTitle');
+  }
+
+  if (btnExportReport) {
+    btnExportReport.textContent = t('reportPdfBtn');
+    btnExportReport.title = t('reportPdfTitle');
+  }
+
+  if (confirmModal) {
+    const modalTitle = confirmModal.querySelector('.modal-title');
+    if (modalTitle) modalTitle.textContent = t('modalCloseTitle');
+    const modalDesc = confirmModal.querySelector('.modal-desc');
+    if (modalDesc) modalDesc.textContent = t('modalCloseDesc');
+    if (modalBtnConfirm) modalBtnConfirm.textContent = t('modalConfirm');
+    if (modalBtnCancel) modalBtnCancel.textContent = t('modalCancel');
+  }
+
+  renderFolderCards();
+  renderSessionTabs();
+
+  if (welcomeContainerInstance && welcomeContainerInstance.style.display !== 'none') {
+    renderWelcomeManual(true);
+  }
+}
+
 async function saveAllConfig() {
   syncInputValuesToFolders(); // Sync data before saving
   const configToSave = {
     theme: currentTheme,
+    lang: currentLang,
     folders: folders.map((f) => ({
       id: f.id,
       path: f.path,
@@ -245,66 +460,70 @@ function debouncedFitAndResize(folderId) {
 }
 
 // Create & Render HTML Centered Welcome Manual Container (FINAL FIXED MANUAL TEXT)
-function renderWelcomeManual() {
-  if (!welcomeContainerInstance) {
-    const welcomeDiv = document.createElement('div');
-    welcomeDiv.className = 'terminal-instance welcome-manual-container';
-    welcomeDiv.id = 'term-container-welcome';
-
-    welcomeDiv.innerHTML = `
+function renderWelcomeManual(force = false) {
+  if (!welcomeContainerInstance || force) {
+    const manualCardHTML = `
       <div class="welcome-manual-card">
         <div class="welcome-title-row">
           <span style="font-size: 1.5rem;">⚡</span>
-          <h2>ACL - 사용 안내 매뉴얼</h2>
+          <h2>${t('welcomeHeader')}</h2>
         </div>
 
         <div class="welcome-step-list">
           <div class="welcome-step-item">
             <span class="welcome-step-num">1.</span>
-            <span>좌측 <span class="welcome-highlight">[➕ 작업 폴더 추가]</span> 버튼을 눌러 프로젝트 디렉토리를 등록합니다.</span>
+            <span>${t('welcomeStep1')}</span>
           </div>
           <div class="welcome-step-item">
             <span class="welcome-step-num">2.</span>
-            <span>원하는 AI CLI <span class="welcome-highlight">(Claude / Antigravity / Codex / Etc..)</span>를 선택합니다.</span>
+            <span>${t('welcomeStep2')}</span>
           </div>
           <div class="welcome-step-item">
             <span class="welcome-step-num">3.</span>
-            <span>폴더 카드의 <span class="welcome-highlight">[▶ 실행]</span> 버튼을 눌러 대화형 세션을 시작합니다.</span>
+            <span>${t('welcomeStep3')}</span>
           </div>
           <div class="welcome-step-item">
             <span class="welcome-step-num">4.</span>
-            <span>하단 <span class="welcome-highlight">[📊 현재 사용량 확인하기]</span> 버튼으로 플랜 한도(Quota %)를 실시간 체크합니다.</span>
+            <span>${t('welcomeStep4')}</span>
           </div>
           <div class="welcome-step-item">
             <span class="welcome-step-num">5.</span>
-            <span>상단 <span class="welcome-highlight">[📝 대화 추출]</span> / <span class="welcome-highlight">[📄 보고서 출력]</span> 버튼으로 대화 원문이나 PDF 보고서를 지정 폴더로 자동 저장합니다.</span>
+            <span>${t('welcomeStep5')}</span>
           </div>
           <div class="welcome-step-item">
             <span class="welcome-step-num">6.</span>
-            <span>하단 <span class="welcome-highlight">[🎨 테마 설정]</span>으로 테마를 바꿀 수 있습니다 (터미널은 다크 고정).</span>
+            <span>${t('welcomeStep6')}</span>
           </div>
         </div>
 
         <div class="welcome-note-box">
-          <div>📌 <strong>참고사항:</strong> claude가 제대로 구동되지 않는다면 환경변수 PATH에 <code>%USERPROFILE%\\.local\\bin</code> 경로를 추가해주세요.</div>
+          <div>${t('welcomeNote')}</div>
         </div>
 
         <div class="welcome-tip-box">
-          💡 <strong>📝 대화 추출 & 📄 보고서 출력 기능:</strong> [📝 대화 추출] 버튼을 누르면 AI 호출 없이 현재 화면 텍스트 원문을 즉시 .md 파일로 추출 저장하며, [📄 보고서 출력]은 대화 요약 PDF 문서를 자동 생성합니다.
+          ${t('welcomeTip')}
         </div>
 
         <div class="welcome-footer-action">
-          ▶ 준비가 되시면 폴더 카드의 [▶ 실행] 버튼을 눌러 세션을 시작하세요!
+          ${t('welcomeFooter')}
         </div>
 
         <div class="welcome-credits">
-          [제작 : 성현우]
+          ${t('welcomeCredits')}
         </div>
       </div>
     `;
 
-    terminalsWrapper.appendChild(welcomeDiv);
-    welcomeContainerInstance = welcomeDiv;
+    if (welcomeContainerInstance && force) {
+      welcomeContainerInstance.innerHTML = manualCardHTML;
+    } else if (!welcomeContainerInstance) {
+      const welcomeDiv = document.createElement('div');
+      welcomeDiv.className = 'terminal-instance welcome-manual-container';
+      welcomeDiv.id = 'term-container-welcome';
+      welcomeDiv.innerHTML = manualCardHTML;
+      terminalsWrapper.appendChild(welcomeDiv);
+      welcomeContainerInstance = welcomeDiv;
+    }
   }
 
   Object.keys(termInstances).forEach((id) => {
@@ -444,10 +663,10 @@ async function launchFolderSession(folderId) {
 
   inst.term.clear();
   inst.sessionRawText = '';
-  inst.term.write(`\x1b[32m[PowerShell 세션 시작 중...]\x1b[0m\r\n`);
-  inst.term.write(`\x1b[36m경로: ${folder.path}\x1b[0m\r\n`);
+  inst.term.write(`\x1b[32m[${t('startingSession')}]\x1b[0m\r\n`);
+  inst.term.write(`\x1b[36m${t('pathLabel')}: ${folder.path}\x1b[0m\r\n`);
   if (commandToRun) {
-    inst.term.write(`\x1b[36m실행 명령어: ${commandToRun}\x1b[0m\r\n\r\n`);
+    inst.term.write(`\x1b[36m${t('commandLabel')}: ${commandToRun}\x1b[0m\r\n\r\n`);
   }
 
   fitAndResizeTerminal(folderId);
@@ -489,7 +708,7 @@ async function launchFolderSession(folderId) {
     scheduleBackupCheck(7500);
   } else {
     folder.isActive = false;
-    inst.term.write(`\x1b[31m[세션 실행 실패: ${result.error}]\x1b[0m\r\n`);
+    inst.term.write(`\x1b[31m[${t('sessionLaunchFailed')}${result.error}]\x1b[0m\r\n`);
   }
 
   renderFolderCards();
@@ -502,7 +721,7 @@ function openCloseModal(folderId) {
   if (!folder) return;
 
   if (!folder.isActive) {
-    alert('현재 실행 중인 세션이 없습니다.');
+    alert(t('noActiveSession'));
     return;
   }
 
@@ -510,7 +729,9 @@ function openCloseModal(folderId) {
   const displayName = getFolderDisplayName(folder);
   const cliName = folder.cli.toUpperCase();
 
-  modalSessionDesc.textContent = `[${displayName}] (${cliName}) 세션 및 실행 중인 CLI를 종료하시겠습니까?`;
+  modalSessionDesc.textContent = currentLang === 'en'
+    ? `Are you sure you want to terminate [${displayName}] (${cliName}) session and running CLI?`
+    : `[${displayName}] (${cliName}) 세션 및 실행 중인 CLI를 종료하시겠습니까?`;
   confirmModal.classList.remove('hidden');
 }
 
@@ -579,7 +800,7 @@ function triggerUsageCheckForSession(sessionId, isManual = false) {
   const folder = folders.find((f) => f.id === sessionId);
   if (!folder || !folder.isActive) {
     if (isManual) {
-      alert('현재 선택된 세션이 실행 중이지 않습니다. 세션을 먼저 시작해 주세요.');
+      alert(t('sessionNotActive'));
     }
     return;
   }
@@ -607,7 +828,7 @@ function triggerUsageCheckForSession(sessionId, isManual = false) {
 
 function triggerManualUsageCheck() {
   if (!activeFolderId) {
-    alert('활성화된 세션이 없습니다. 실행(▶) 버튼을 먼저 눌러 세션을 연결해 주세요.');
+    alert(t('noActiveSessionStartFirst'));
     return;
   }
   triggerUsageCheckForSession(activeFolderId, true);
@@ -616,13 +837,13 @@ function triggerManualUsageCheck() {
 // --- Export Conversation Report as PDF to Specified Folder ---
 async function exportConversationReportPDF() {
   if (!activeFolderId) {
-    alert('활성화된 세션이 없습니다. 먼저 폴더 카드의 [▶ 실행] 버튼을 눌러 세션을 연결해 주세요.');
+    alert(t('noActiveSessionForReport'));
     return;
   }
 
   const folder = folders.find((f) => f.id === activeFolderId);
   if (!folder || !folder.isActive) {
-    alert('현재 선택된 세션이 실행 중이지 않습니다. 먼저 세션을 시작해 주세요.');
+    alert(t('sessionNotActive'));
     return;
   }
 
@@ -638,7 +859,9 @@ async function exportConversationReportPDF() {
 
   const normalizedPath = selectedPath.replace(/\\/g, '/');
   // High-speed, Token-minimized & Clean PDF Report Prompt
-  const promptText = `현재 대화 내용을 핵심 위주로 명확히 요약하여 "${normalizedPath}" 폴더에 PDF 보고서 파일로 즉시 생성해줘. (단답형 핵심 작성, 부연설명 생략)`;
+  const promptText = currentLang === 'en'
+    ? `Please summarize the current conversation concisely into key points and generate a PDF report file in the "${normalizedPath}" folder immediately. (Bullet points only, omit extra explanations)`
+    : `현재 대화 내용을 핵심 위주로 명확히 요약하여 "${normalizedPath}" 폴더에 PDF 보고서 파일로 즉시 생성해줘. (단답형 핵심 작성, 부연설명 생략)`;
 
   // 2. Write Prompt Text first
   await window.api.writePty({ sessionId: activeFolderId, data: promptText });
@@ -730,7 +953,7 @@ function getTerminalBufferText(folderId) {
 // --- Export Raw Chat Conversation Content to Specified Folder ---
 async function exportConversationChatRaw() {
   if (!activeFolderId) {
-    alert('활성화된 세션이 없습니다. 먼저 폴더 카드의 [▶ 실행] 버튼을 눌러 세션을 연결해 주세요.');
+    alert(t('noActiveSessionStartFirst'));
     return;
   }
 
@@ -739,7 +962,7 @@ async function exportConversationChatRaw() {
 
   const rawText = getTerminalBufferText(activeFolderId);
   if (!rawText || rawText.trim().length === 0) {
-    alert('현재 세션에 추출할 대화 내용이 없습니다.');
+    alert(t('noContentToExtract'));
     return;
   }
 
@@ -762,7 +985,9 @@ async function exportConversationChatRaw() {
     String(now.getMinutes()).padStart(2, '0') +
     String(now.getSeconds()).padStart(2, '0');
 
-  const filename = `${displayName}_대화추출_${dateStr}.md`;
+  const filename = currentLang === 'en'
+    ? `${displayName}_ChatExtract_${dateStr}.md`
+    : `${displayName}_대화추출_${dateStr}.md`;
 
   const mdContent = `# AI CLI PowerShell Session Raw Extract
 - Folder: ${folder.path}
@@ -781,9 +1006,9 @@ ${rawText}
   });
 
   if (res && res.success) {
-    alert(`현재 세션 대화 내용이 .md 파일로 저장되었습니다!\n\n저장 위치:\n${res.filePath}`);
+    alert(`${t('chatSavedSuccess')}${res.filePath}`);
   } else {
-    alert(`대화 추출 저장 중 오류가 발생했습니다: ${res && res.error ? res.error : ''}`);
+    alert(`${t('chatSavedError')}${res && res.error ? res.error : ''}`);
   }
 }
 
@@ -806,38 +1031,38 @@ function renderFolderCards() {
     card.innerHTML = `
       <div class="folder-card-header">
         <div class="folder-info" title="${folder.path}">
-          <div class="status-dot ${folder.isActive ? 'active' : 'inactive'}" title="${folder.isActive ? '세션 활성화 중 (초록색)' : '세션 비활성화됨 (회색)'}"></div>
+          <div class="status-dot ${folder.isActive ? 'active' : 'inactive'}" title="${folder.isActive ? t('sessionActiveDot') : t('sessionInactiveDot')}"></div>
           <span class="folder-badge-tag">${badgeText}</span>
           <div class="folder-name-group">
             <span class="folder-path-text">📁 ${displayName}</span>
             <span class="folder-path-subtext">${folder.path}</span>
           </div>
         </div>
-        <button class="btn-card-launch-mini" data-action="launch" title="실행">▶</button>
-        <button class="btn-card-close-mini ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? '세션 닫기' : '실행 중인 세션 없음'}">⏹</button>
-        <button class="btn-icon-delete" data-action="delete" title="목록에서 삭제">🗑️</button>
+        <button class="btn-card-launch-mini" data-action="launch" title="${t('launchBtnTitle')}">▶</button>
+        <button class="btn-card-close-mini ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">⏹</button>
+        <button class="btn-icon-delete" data-action="delete" title="${t('deleteFolderTitle')}">🗑️</button>
       </div>
 
       <div class="folder-card-controls">
         <input type="text" class="folder-alias-input" data-action="alias-input" 
-               placeholder="🏷️ 별칭 지정 (선택)" value="${folder.alias || ''}" spellcheck="false" autocomplete="off" />
+               placeholder="${t('aliasPlaceholder')}" value="${folder.alias || ''}" spellcheck="false" autocomplete="off" />
 
         <select class="cli-select-sm" data-action="cli-change">
           <option value="claude" ${folder.cli === 'claude' ? 'selected' : ''}>Claude (claude)</option>
           <option value="antigravity" ${folder.cli === 'antigravity' ? 'selected' : ''}>Antigravity (agy)</option>
           <option value="codex" ${folder.cli === 'codex' ? 'selected' : ''}>Codex (codex)</option>
-          <option value="etc" ${folder.cli === 'etc' ? 'selected' : ''}>Etc.. (직접 입력)</option>
+          <option value="etc" ${folder.cli === 'etc' ? 'selected' : ''}>Etc.. (${t('customInputLabel')})</option>
         </select>
 
         <input type="text" class="input-custom-sm ${folder.cli === 'etc' ? '' : 'hidden'}" 
                data-action="custom-cmd" 
-               placeholder="예: claude --verbose" 
+               placeholder="${t('customCmdPlaceholder')}" 
                value="${folder.customCommand || ''}" spellcheck="false" autocomplete="off" />
       </div>
 
       <div class="folder-card-actions">
-        <button class="btn-card-action btn-card-launch" data-action="launch" title="세션 실행">▶ 실행</button>
-        <button class="btn-card-action btn-card-close ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? '세션 닫기' : '실행 중인 세션 없음'}">⏹ 닫기</button>
+        <button class="btn-card-action btn-card-launch" data-action="launch" title="${t('launchBtnTitle')}">${t('launchBtn')}</button>
+        <button class="btn-card-action btn-card-close ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">${t('closeBtn')}</button>
       </div>
     `;
 
@@ -1160,11 +1385,19 @@ function initSidebarResizer() {
 document.addEventListener('DOMContentLoaded', async () => {
   const config = await window.api.loadConfig();
 
+  if (config && config.lang) {
+    currentLang = config.lang;
+  } else {
+    currentLang = 'ko';
+  }
+
   if (config && config.theme) {
     applyTheme(config.theme);
   } else {
     applyTheme('dark');
   }
+
+  updateUILanguage();
 
   if (config && config.folders && config.folders.length > 0) {
     folders = config.folders.map((f) => ({
@@ -1241,6 +1474,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     toggleTheme();
   });
 
+  // Language Select Event
+  if (selectLang) {
+    selectLang.value = currentLang;
+    selectLang.addEventListener('change', (e) => {
+      currentLang = e.target.value;
+      updateUILanguage();
+      saveAllConfig();
+    });
+  }
+
   // Usage Check Button Event
   btnCheckUsage.addEventListener('click', () => {
     triggerManualUsageCheck();
@@ -1282,9 +1525,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnSave.addEventListener('click', async () => {
     const res = await saveAllConfig();
     if (res && res.success) {
-      alert(`사용자 설정(directory.json)이 성공적으로 이중 보존되었습니다!\n\n저장 위치:\n${res.path}`);
+      alert(`${t('configSaveSuccess')}${res.path}`);
     } else {
-      alert(`설정 저장 중 오류가 발생했습니다.\n${res && res.error ? res.error : ''}`);
+      alert(`${t('configSaveError')}${res && res.error ? res.error : ''}`);
     }
   });
 

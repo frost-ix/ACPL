@@ -1,5 +1,7 @@
 # ACPL (AI CLI PowerShell Launcher)
 
+[En](docs/README.md)
+
 ACPL은 Windows 환경에서 Claude Code, Antigravity, Codex 등 다양한 AI CLI 도구를 폴더별로 관리하고 동시에 멀티 세션으로 실행할 수 있도록 돕는 PowerShell 기반 실행기입니다.
 
 여러 프로젝트 디렉토리를 오가며 터미널 창을 개별적으로 띄우고 명령어를 반복 입력하는 번거로움을 줄이고, 단일 인터페이스에서 폴더별 세션 전환과 대화 기록 저장을 손쉽게 처리할 수 있도록 개발되었습니다.
