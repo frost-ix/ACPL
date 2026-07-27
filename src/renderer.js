@@ -697,7 +697,7 @@ async function launchFolderSession(folderId) {
           typeof folder.usage.geminiQuota === 'number' ||
           typeof folder.usage.claudeQuota === 'number'
         );
-        if (!hasParsedQuota && !isCheckingUsageMap[folderId]) {
+        if (!hasParsedQuota && !hasAutoCheckedUsageMap[folderId] && !isCheckingUsageMap[folderId]) {
           hasAutoCheckedUsageMap[folderId] = true;
           triggerUsageCheckForSession(folderId, false);
         }
@@ -805,6 +805,9 @@ function triggerUsageCheckForSession(sessionId, isManual = false) {
     return;
   }
 
+  // Prevent multiple concurrent checks on the same session
+  if (isCheckingUsageMap[sessionId]) return;
+
   isCheckingUsageMap[sessionId] = true;
 
   const rawCmd = (folder.cli === 'codex') ? '/status' : '/usage';
@@ -818,7 +821,7 @@ function triggerUsageCheckForSession(sessionId, isManual = false) {
   }, 100);
 
   // 3. Send ESC (\x1b) after delay to close TUI overlay cleanly after rendering
-  const delay = (folder.cli === 'antigravity' || folder.cli === 'codex') ? 1400 : 900;
+  const delay = (folder.cli === 'antigravity' || folder.cli === 'codex') ? 1400 : 950;
 
   setTimeout(() => {
     window.api.writePty({ sessionId, data: '\x1b' });
@@ -1019,66 +1022,84 @@ function renderFolderCards() {
   folderListContainer.innerHTML = '';
 
   folders.forEach((folder) => {
+    // Default accordion state: closed (isExpanded = false)
+    if (typeof folder.isExpanded === 'undefined') {
+      folder.isExpanded = false;
+    }
+
     const isSelected = folder.id === activeFolderId;
     const card = document.createElement('div');
-    card.className = `folder-card ${isSelected ? 'active-selected' : ''}`;
+    card.className = `folder-card ${isSelected ? 'active-selected' : ''} ${folder.isExpanded ? 'expanded' : 'collapsed'}`;
     card.setAttribute('data-folder-id', folder.id);
 
     const displayName = getFolderDisplayName(folder);
     const badgeText = getShortBadgeText(folder);
+    const toggleIcon = folder.isExpanded ? '▼' : '▶';
 
-    // Guaranteed Always Visible [⏹ 닫기] Buttons (Active vs Disabled)
     card.innerHTML = `
-      <div class="folder-card-header">
+      <div class="folder-card-header" data-action="toggle-header">
+        <span class="folder-toggle-icon" data-action="toggle-header">${toggleIcon}</span>
         <div class="folder-info" title="${folder.path}">
           <div class="status-dot ${folder.isActive ? 'active' : 'inactive'}" title="${folder.isActive ? t('sessionActiveDot') : t('sessionInactiveDot')}"></div>
           <span class="folder-badge-tag">${badgeText}</span>
           <div class="folder-name-group">
             <span class="folder-path-text">📁 ${displayName}</span>
-            <span class="folder-path-subtext">${folder.path}</span>
           </div>
         </div>
-        <button class="btn-card-launch-mini" data-action="launch" title="${t('launchBtnTitle')}">▶</button>
-        <button class="btn-card-close-mini ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">⏹</button>
-        <button class="btn-icon-delete" data-action="delete" title="${t('deleteFolderTitle')}">🗑️</button>
+        <div class="folder-card-header-actions">
+          <button class="btn-card-launch-mini" data-action="launch" title="${t('launchBtnTitle')}">▶</button>
+          <button class="btn-card-close-mini ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">⏹</button>
+          <button class="btn-icon-delete" data-action="delete" title="${t('deleteFolderTitle')}">🗑️</button>
+        </div>
       </div>
 
-      <div class="folder-card-controls">
-        <input type="text" class="folder-alias-input" data-action="alias-input" 
-               placeholder="${t('aliasPlaceholder')}" value="${folder.alias || ''}" spellcheck="false" autocomplete="off" />
+      <div class="folder-card-body ${folder.isExpanded ? '' : 'hidden'}">
+        <div class="folder-card-subpath" title="${folder.path}">${folder.path}</div>
+        <div class="folder-card-controls">
+          <input type="text" class="folder-alias-input" data-action="alias-input" 
+                 placeholder="${t('aliasPlaceholder')}" value="${folder.alias || ''}" spellcheck="false" autocomplete="off" />
 
-        <select class="cli-select-sm" data-action="cli-change">
-          <option value="claude" ${folder.cli === 'claude' ? 'selected' : ''}>Claude (claude)</option>
-          <option value="antigravity" ${folder.cli === 'antigravity' ? 'selected' : ''}>Antigravity (agy)</option>
-          <option value="codex" ${folder.cli === 'codex' ? 'selected' : ''}>Codex (codex)</option>
-          <option value="etc" ${folder.cli === 'etc' ? 'selected' : ''}>Etc.. (${t('customInputLabel')})</option>
-        </select>
+          <select class="cli-select-sm" data-action="cli-change">
+            <option value="claude" ${folder.cli === 'claude' ? 'selected' : ''}>Claude (claude)</option>
+            <option value="antigravity" ${folder.cli === 'antigravity' ? 'selected' : ''}>Antigravity (agy)</option>
+            <option value="codex" ${folder.cli === 'codex' ? 'selected' : ''}>Codex (codex)</option>
+            <option value="etc" ${folder.cli === 'etc' ? 'selected' : ''}>Etc.. (${t('customInputLabel')})</option>
+          </select>
 
-        <input type="text" class="input-custom-sm ${folder.cli === 'etc' ? '' : 'hidden'}" 
-               data-action="custom-cmd" 
-               placeholder="${t('customCmdPlaceholder')}" 
-               value="${folder.customCommand || ''}" spellcheck="false" autocomplete="off" />
-      </div>
+          <input type="text" class="input-custom-sm ${folder.cli === 'etc' ? '' : 'hidden'}" 
+                 data-action="custom-cmd" 
+                 placeholder="${t('customCmdPlaceholder')}" 
+                 value="${folder.customCommand || ''}" spellcheck="false" autocomplete="off" />
+        </div>
 
-      <div class="folder-card-actions">
-        <button class="btn-card-action btn-card-launch" data-action="launch" title="${t('launchBtnTitle')}">${t('launchBtn')}</button>
-        <button class="btn-card-action btn-card-close ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">${t('closeBtn')}</button>
+        <div class="folder-card-actions">
+          <button class="btn-card-action btn-card-launch" data-action="launch" title="${t('launchBtnTitle')}">${t('launchBtn')}</button>
+          <button class="btn-card-action btn-card-close ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">${t('closeBtn')}</button>
+        </div>
       </div>
     `;
 
     card.addEventListener('click', (e) => {
-      const target = e.target;
-      const action = target.getAttribute('data-action');
+      const actionBtn = e.target.closest('[data-action]');
+      const action = actionBtn ? actionBtn.getAttribute('data-action') : null;
 
       if (action === 'delete') {
         e.stopPropagation();
+        e.preventDefault();
         removeFolderCard(folder.id);
       } else if (action === 'launch') {
         e.stopPropagation();
+        e.preventDefault();
         launchFolderSession(folder.id);
       } else if (action === 'close') {
         e.stopPropagation();
+        e.preventDefault();
         openCloseModal(folder.id);
+      } else if (action === 'toggle-header') {
+        e.stopPropagation();
+        folder.isExpanded = !folder.isExpanded;
+        selectActiveFolder(folder.id);
+        renderFolderCards();
       } else {
         selectActiveFolder(folder.id);
       }
@@ -1096,7 +1117,7 @@ function renderFolderCards() {
       el.addEventListener('keyup', (e) => e.stopPropagation());
     });
 
-    // Precision Input Event Handler for Alias without card re-rendering
+    // Precision Input Event Handler for Alias without full re-rendering
     aliasInputEl.addEventListener('input', (e) => {
       folder.alias = e.target.value;
       const nameTextEl = card.querySelector('.folder-path-text');
@@ -1254,9 +1275,10 @@ window.api.onPtyData(({ sessionId, data }) => {
                         /Welcome\s*back/i.test(cleanData) ||
                         /Tips\s*for\s*getting\s*started/i.test(cleanData) ||
                         /shift\+tab\s*to\s*cycle/i.test(cleanData) ||
-                        /plan\s*mode/i.test(cleanData);
+                        /plan\s*mode/i.test(cleanData) ||
+                        />\s*$/m.test(cleanData) ||
+                        /claude/i.test(cleanData);
         } else if (folder.cli === 'antigravity') {
-          // Exclude command echo 'agy' matching: only trigger on CLI prompt/banner strings
           isCliLoaded = /Antigravity\s*CLI/i.test(cleanData) ||
                         /Google\s*AI/i.test(cleanData) ||
                         /Gemini\s*3\./i.test(cleanData) ||
@@ -1273,16 +1295,16 @@ window.api.onPtyData(({ sessionId, data }) => {
                         /Usage\s*Limits/i.test(cleanData) ||
                         /5h\s*limit/i.test(cleanData);
         } else {
-          isCliLoaded = cleanData.length > 50;
+          isCliLoaded = cleanData.length > 30;
         }
       }
 
-      if (isCliLoaded) {
+      if (isCliLoaded && !hasAutoCheckedUsageMap[sessionId] && !isCheckingUsageMap[sessionId]) {
         hasAutoCheckedUsageMap[sessionId] = true;
         // Wait for CLI interactive TUI prompt to finish loading event listeners
-        const initDelay = (folder.cli === 'antigravity' || folder.cli === 'codex') ? 1500 : 800;
+        const initDelay = (folder.cli === 'antigravity' || folder.cli === 'codex') ? 1400 : 950;
         setTimeout(() => {
-          if (folder.isActive && !isCheckingUsageMap[sessionId]) {
+          if (folder.isActive) {
             triggerUsageCheckForSession(sessionId, false);
           }
         }, initDelay);
@@ -1512,6 +1534,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         alias: '',
         cli: 'claude',
         customCommand: '',
+        isExpanded: false,
         isActive: false,
         usage: { tokens: 0, cost: 0.0, sessionQuota: null, weekQuota: null },
       };
@@ -1539,4 +1562,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   modalBtnConfirm.addEventListener('click', () => {
     closeFolderSessionConfirmed();
   });
+
+  // Save Config on App Exit Interception
+  if (window.api && window.api.onSaveBeforeQuit) {
+    window.api.onSaveBeforeQuit(async () => {
+      await saveAllConfig();
+      if (window.api.confirmQuit) {
+        window.api.confirmQuit();
+      }
+    });
+  }
 });

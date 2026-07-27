@@ -28,4 +28,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('pty:exit', subscription);
     return () => ipcRenderer.removeListener('pty:exit', subscription);
   },
+
+  // Save on Quit IPC
+  onSaveBeforeQuit: (callback) => {
+    const subscription = (event) => callback();
+    ipcRenderer.on('save-before-quit', subscription);
+    return () => ipcRenderer.removeListener('save-before-quit', subscription);
+  },
+  confirmQuit: () => ipcRenderer.send('confirm-quit'),
 });

@@ -184,12 +184,16 @@ body, html {
   background-color: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 10px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  transition: all 0.2s;
+  gap: 6px;
+  transition: all 0.2s ease;
   cursor: pointer;
+}
+
+.folder-card:hover {
+  border-color: var(--accent-secondary);
 }
 
 .folder-card.active-selected {
@@ -202,19 +206,30 @@ body, html {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+  user-select: none;
+  width: 100%;
+}
+
+.folder-toggle-icon {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
 }
 
 .folder-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   overflow: hidden;
   flex: 1;
 }
 
 .status-dot {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   flex-shrink: 0;
 }
@@ -230,10 +245,10 @@ body, html {
 
 /* Short Badge Text */
 .folder-badge-tag {
-  padding: 2px 6px;
+  padding: 2px 5px;
   background-color: var(--badge-bg);
   color: var(--badge-text);
-  font-size: 0.75rem;
+  font-size: 0.73rem;
   font-weight: 700;
   border-radius: 4px;
   border: 1px solid var(--border-color);
@@ -249,7 +264,7 @@ body, html {
 }
 
 .folder-path-text {
-  font-size: 0.85rem;
+  font-size: 0.84rem;
   font-weight: 700;
   color: var(--text-main);
   white-space: nowrap;
@@ -265,19 +280,43 @@ body, html {
   text-overflow: ellipsis;
 }
 
+.folder-card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .btn-icon-delete {
   background: transparent;
   border: none;
   color: var(--text-muted);
   cursor: pointer;
   font-size: 0.95rem;
-  padding: 2px 6px;
+  padding: 2px 5px;
   border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .btn-icon-delete:hover {
   color: var(--danger-color);
   background-color: rgba(239, 68, 68, 0.1);
+}
+
+.folder-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-color);
+  margin-top: 2px;
+}
+
+.folder-card-body.hidden {
+  display: none !important;
 }
 
 .folder-card-controls {
@@ -379,49 +418,10 @@ body, html {
   cursor: not-allowed;
 }
 
-/* Compact Launch & Close Buttons for Collapsed Mode */
-.btn-card-launch-mini {
-  display: none;
-  width: 36px;
-  height: 26px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  background-color: var(--accent-primary);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  text-align: center;
-  transition: background-color 0.2s;
-}
-
-.btn-card-launch-mini:hover {
-  background-color: var(--accent-hover);
-}
-
+/* Compact Launch & Close Buttons (Only displayed in Collapsed Sidebar mode) */
+.btn-card-launch-mini,
 .btn-card-close-mini {
-  display: none;
-  width: 36px;
-  height: 26px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  background-color: rgba(239, 68, 68, 0.2);
-  color: var(--danger-color);
-  border: 1px solid var(--danger-color);
-  border-radius: 4px;
-  cursor: pointer;
-  text-align: center;
-  transition: all 0.2s;
-}
-
-.btn-card-close-mini.active {
-  background-color: var(--danger-color);
-  color: white;
-}
-
-.btn-card-close-mini.disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
+  display: none !important;
 }
 
 /* Sidebar Footer (Bottom) */
@@ -456,27 +456,6 @@ body, html {
   background-color: var(--accent-primary);
   color: white;
   border-color: var(--accent-primary);
-}
-
-.status-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  background-color: var(--bg-card);
-  border-radius: 6px;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
-
-.status-indicator {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.status-indicator.active {
-  background-color: var(--status-active);
 }
 
 /* Theme & Language Toggle Button Group */
@@ -601,8 +580,10 @@ body, html {
 .sidebar.collapsed .sidebar-text,
 .sidebar.collapsed .folder-card-controls,
 .sidebar.collapsed .folder-card-actions,
+.sidebar.collapsed .folder-card-body,
 .sidebar.collapsed .folder-name-group,
 .sidebar.collapsed .btn-icon-delete,
+.sidebar.collapsed .folder-toggle-icon,
 .sidebar.collapsed .theme-label {
   display: none !important;
 }
@@ -614,13 +595,14 @@ body, html {
 }
 
 .sidebar.collapsed .folder-card {
-  width: 46px;
-  padding: 8px 0;
+  width: 44px;
+  padding: 6px 2px;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   flex-direction: column;
   border-radius: 8px;
+  box-sizing: border-box;
 }
 
 .sidebar.collapsed .folder-card-header {
@@ -628,7 +610,7 @@ body, html {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .sidebar.collapsed .folder-info {
@@ -640,23 +622,62 @@ body, html {
 }
 
 .sidebar.collapsed .folder-badge-tag {
-  font-size: 0.72rem;
-  padding: 2px 4px;
+  font-size: 0.7rem;
+  padding: 2px 3px;
   text-align: center;
-  max-width: 40px;
+  max-width: 38px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar.collapsed .btn-card-launch-mini,
-.sidebar.collapsed .btn-card-close-mini {
+.sidebar.collapsed .folder-card-header-actions {
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.sidebar.collapsed .btn-card-launch-mini {
+  display: flex !important;
   align-items: center;
   justify-content: center;
   width: 36px;
   height: 24px;
-  margin-top: 2px;
+  margin: 0;
+  padding: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background-color: var(--accent-primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.sidebar.collapsed .btn-card-close-mini {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background-color: rgba(239, 68, 68, 0.15);
+  color: var(--danger-color);
+  border: 1px solid var(--danger-color);
+  border-radius: 4px;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.sidebar.collapsed .btn-card-close-mini.active {
+  background-color: var(--danger-color);
+  color: white;
 }
 
 .sidebar.collapsed .sidebar-footer {
@@ -666,57 +687,57 @@ body, html {
 }
 
 .sidebar.collapsed .btn-check-usage {
-  width: 42px;
-  height: 42px;
-  padding: 0;
-  justify-content: center;
-  font-size: 1.1rem;
-  border-radius: 8px;
-}
-
-.sidebar.collapsed .status-box {
-  width: 42px;
-  height: 42px;
-  padding: 0;
-  justify-content: center;
-  border-radius: 8px;
-}
-
-.sidebar.collapsed .theme-toggle-group {
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-}
-
-.sidebar.collapsed .btn-theme-toggle {
-  width: 42px;
-  height: 42px;
-  padding: 0;
-  justify-content: center;
-  font-size: 1.1rem;
-  border-radius: 8px;
-}
-
-.sidebar.collapsed .select-lang {
-  width: 42px;
-  height: 32px;
-  padding: 2px;
-  font-size: 0.75rem;
-  border-radius: 8px;
-  text-align: center;
-  text-align-last: center;
-}
-
-.sidebar.collapsed .btn-save-bottom {
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 1.1rem;
   border-radius: 8px;
+  box-sizing: border-box;
+}
+
+.sidebar.collapsed .theme-toggle-group {
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.sidebar.collapsed .btn-theme-toggle {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+
+.sidebar.collapsed .select-lang {
+  width: 40px;
+  height: 30px;
+  padding: 2px 0;
+  font-size: 0.75rem;
+  border-radius: 6px;
+  text-align: center;
+  text-align-last: center;
+  box-sizing: border-box;
+}
+
+.sidebar.collapsed .btn-save-bottom {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  border-radius: 8px;
+  box-sizing: border-box;
 }
 
 /* --- POWERSHELL TERMINAL AREA (ALWAYS DEEP DARK) --- */

@@ -210,34 +210,43 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
   mainWindow.setMenuBarVisibility(false);
 
-  // App Close Interception & Safety Warning Alert Dialog
+  // App Close Interception & Safety Warning / Config Save Alert Dialog
   mainWindow.on('close', (e) => {
     if (!isQuittingConfirmed) {
       e.preventDefault();
 
       const activeCount = ptySessions.size;
       const detailMsg = activeCount > 0
-        ? `현재 ${activeCount}개의 세션이 구동 중입니다.\n실행 중인 모든 세션이 전부 종료됩니다.\n\n정말로 프로그램을 종료하시겠습니까?`
-        : `연결된 세션이 전부 종료됩니다.\n\n정말로 프로그램을 종료하시겠습니까?`;
+        ? `현재 ${activeCount}개의 세션이 구동 중입니다.\n실행 중인 모든 세션도 함께 종료됩니다.\n\n현재 폴더구성을 저장하시겠습니까?`
+        : `현재 폴더구성을 저장하시겠습니까?`;
 
       const choice = dialog.showMessageBoxSync(mainWindow, {
-        type: 'warning',
-        buttons: ['프로그램 종료', '취소'],
-        defaultId: 1,
-        cancelId: 1,
-        title: '프로그램 종료 확인',
-        message: '프로그램을 종료하시겠습니까?',
+        type: 'question',
+        buttons: ['저장 후 종료', '저장하지 않고 종료', '취소'],
+        defaultId: 0,
+        cancelId: 2,
+        title: '프로그램 종료 및 설정 저장',
+        message: '프로그램을 종료합니다.',
         detail: detailMsg,
         noLink: true,
       });
 
       if (choice === 0) {
+        mainWindow.webContents.send('save-before-quit');
+      } else if (choice === 1) {
         isQuittingConfirmed = true;
         mainWindow.close();
       }
     }
   });
 }
+
+ipcMain.on('confirm-quit', () => {
+  isQuittingConfirmed = true;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+  }
+});
 
 app.whenReady().then(() => {
   createWindow();
