@@ -44,6 +44,7 @@ const i18n = {
     closeBtnTitleActive: '세션 닫기',
     closeBtnTitleDisabled: '실행 중인 세션 없음',
     deleteFolderTitle: '목록에서 삭제',
+    deleteFolderBtn: '🗑️ 목록에서 삭제',
     sessionActiveDot: '세션 활성화 중 (초록색)',
     sessionInactiveDot: '세션 비활성화됨 (회색)',
 
@@ -117,6 +118,7 @@ const i18n = {
     closeBtnTitleActive: 'Stop session',
     closeBtnTitleDisabled: 'No running session',
     deleteFolderTitle: 'Delete from list',
+    deleteFolderBtn: '🗑️ Delete from list',
     sessionActiveDot: 'Session active (Green)',
     sessionInactiveDot: 'Session inactive (Gray)',
 
@@ -1049,7 +1051,6 @@ function renderFolderCards() {
         <div class="folder-card-header-actions">
           <button class="btn-card-launch-mini" data-action="launch" title="${t('launchBtnTitle')}">▶</button>
           <button class="btn-card-close-mini ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">⏹</button>
-          <button class="btn-icon-delete" data-action="delete" title="${t('deleteFolderTitle')}">🗑️</button>
         </div>
       </div>
 
@@ -1073,8 +1074,7 @@ function renderFolderCards() {
         </div>
 
         <div class="folder-card-actions">
-          <button class="btn-card-action btn-card-launch" data-action="launch" title="${t('launchBtnTitle')}">${t('launchBtn')}</button>
-          <button class="btn-card-action btn-card-close ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">${t('closeBtn')}</button>
+          <button class="btn-card-action btn-card-delete-full" data-action="delete" title="${t('deleteFolderTitle')}">${t('deleteFolderBtn')}</button>
         </div>
       </div>
     `;

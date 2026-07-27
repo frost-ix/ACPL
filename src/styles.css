@@ -243,8 +243,9 @@ body, html {
   background-color: var(--status-inactive);
 }
 
-/* Short Badge Text */
+/* Short Badge Text (Only visible when sidebar is collapsed) */
 .folder-badge-tag {
+  display: none !important;
   padding: 2px 5px;
   background-color: var(--badge-bg);
   color: var(--badge-text);
@@ -413,15 +414,76 @@ body, html {
   color: white;
 }
 
-.btn-card-close.disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+.btn-card-delete-full {
+  width: 100%;
+  padding: 7px;
+  background-color: rgba(239, 68, 68, 0.12);
+  color: var(--danger-color);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 5px;
+  font-weight: 600;
+  font-size: 0.78rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s;
 }
 
-/* Compact Launch & Close Buttons (Only displayed in Collapsed Sidebar mode) */
-.btn-card-launch-mini,
+.btn-card-delete-full:hover {
+  background-color: var(--danger-color);
+  color: white;
+  border-color: var(--danger-color);
+}
+
+/* Compact Launch & Close Buttons for Card Header */
+.btn-card-launch-mini {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background-color: var(--accent-primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.btn-card-launch-mini:hover {
+  background-color: var(--accent-hover);
+}
+
 .btn-card-close-mini {
-  display: none !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background-color: rgba(239, 68, 68, 0.15);
+  color: var(--danger-color);
+  border: 1px solid var(--danger-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.btn-card-close-mini.active {
+  background-color: var(--danger-color);
+  color: white;
+}
+
+.btn-card-close-mini.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* Sidebar Footer (Bottom) */
@@ -622,6 +684,7 @@ body, html {
 }
 
 .sidebar.collapsed .folder-badge-tag {
+  display: inline-block !important;
   font-size: 0.7rem;
   padding: 2px 3px;
   text-align: center;
