@@ -310,6 +310,10 @@ ipcMain.handle('pty:spawn', async (event, { sessionId, folderPath, commandToRun,
     if (ptySessions.has(sessionId)) {
       const existing = ptySessions.get(sessionId);
       try {
+        if (existing.removeAllListeners) {
+          existing.removeAllListeners('exit');
+          existing.removeAllListeners('data');
+        }
         existing.kill();
       } catch (e) {}
       ptySessions.delete(sessionId);
@@ -358,6 +362,10 @@ ipcMain.handle('pty:kill', async (event, { sessionId }) => {
   const ptyProcess = ptySessions.get(sessionId);
   if (ptyProcess) {
     try {
+      if (ptyProcess.removeAllListeners) {
+        ptyProcess.removeAllListeners('exit');
+        ptyProcess.removeAllListeners('data');
+      }
       ptyProcess.kill();
       ptySessions.delete(sessionId);
       return { success: true };

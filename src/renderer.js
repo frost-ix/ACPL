@@ -654,6 +654,11 @@ async function launchFolderSession(folderId) {
   const folder = folders.find((f) => f.id === folderId);
   if (!folder) return;
 
+  // Clean kill previous PTY session process if already running before respawning
+  if (folder.isActive) {
+    await window.api.killPty({ sessionId: folderId });
+  }
+
   let inst = termInstances[folderId];
   if (!inst) {
     inst = createTerminalInstance(folderId);
