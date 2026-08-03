@@ -1,17 +1,14 @@
 {
   "name": "ACL",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "ACPL - Multi-folder OS Shell Integration supporting Anthropic Claude, Antigravity, and Codex CLI",
-  "main": "main.js",
   "scripts": {
-    "postinstall": "node scripts/copy-prebuilds.js",
-    "start": "electron .",
-    "build:exe": "node scripts/copy-prebuilds.js && electron-builder --win",
-    "build:portable": "node scripts/copy-prebuilds.js && electron-builder --win portable",
-    "build:dir": "node scripts/copy-prebuilds.js && electron-builder --win dir"
+    "start": "cmd /c \"set PATH=%USERPROFILE%\\.cargo\\bin;%PATH% && npx tauri dev\"",
+    "tauri:dev": "cmd /c \"set PATH=%USERPROFILE%\\.cargo\\bin;%PATH% && npx tauri dev\"",
+    "tauri:build": "cmd /c \"set PATH=%USERPROFILE%\\.cargo\\bin;%PATH% && npx tauri build\""
   },
   "keywords": [
-    "electron",
+    "tauri",
     "powershell",
     "claude",
     "antigravity",
@@ -21,8 +18,8 @@
   "author": "성현우",
   "license": "ISC",
   "devDependencies": {
-    "electron": "^34.1.0",
-    "electron-builder": "^25.1.8"
+    "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/cli": "^2.2.0"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

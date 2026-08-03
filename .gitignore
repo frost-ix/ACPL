@@ -1,7 +1,19 @@
-/dist
+# Node & Frontend dependencies
 /node_modules
-/scripts
+/dist
+
+# Tauri & Rust build artifacts
+/src-tauri/target
+/src-tauri/gen
+
+# Config & Temporary files
+directory.json
+*.tmp
+*.log
+
+# Workspace & Editor files
 README_BUILD.md
 TODO.md
-directory.json
 .claude
+.DS_Store
+Thumbs.db
