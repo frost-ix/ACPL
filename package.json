@@ -1,6 +1,6 @@
 {
   "name": "ACL",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "ACPL - Multi-folder OS Shell Integration supporting Anthropic Claude, Antigravity, and Codex CLI",
   "scripts": {
     "start": "cmd /c \"set PATH=%USERPROFILE%\\.cargo\\bin;%PATH% && npx tauri dev\"",
@@ -16,43 +16,13 @@
     "cli"
   ],
   "author": "성현우",
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/cli": "^2.2.0"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
-    "@xterm/xterm": "^5.5.0",
-    "node-pty": "^1.1.0"
-  },
-  "build": {
-    "appId": "com.acpl.os-shell-launcher",
-    "productName": "ACPL",
-    "icon": "public/acl_icon.png",
-    "asar": true,
-    "asarUnpack": [
-      "**/node_modules/node-pty/**"
-    ],
-    "compression": "store",
-    "files": [
-      "main.js",
-      "preload.js",
-      "src/**/*",
-      "public/**/*",
-      "node_modules/node-pty/build/Release/*",
-      "package.json"
-    ],
-    "win": {
-      "icon": "public/acl_icon.png",
-      "target": [
-        "portable",
-        "dir"
-      ]
-    },
-    "portable": {
-      "artifactName": "${productName}.${ext}",
-      "requestExecutionLevel": "user"
-    }
+    "@xterm/xterm": "^5.5.0"
   }
 }

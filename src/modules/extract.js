@@ -1,140 +1,112 @@
 // Chat Extraction & PDF Report Module
+//
+// Both prefer the CLI's own history file (whole conversation, also from before an app restart);
+// the screen content is the fallback for CLIs without one.
 
 import { t, getCurrentLang } from './i18n.js';
-import { getFolders, getActiveFolderId, termInstances } from './state.js';
-import { getFolderDisplayName } from './ui.js';
+import { getFolder, getActiveFolderId, termInstances } from './state.js';
+import { serializeChat, submitChatPrompt, focusChatInput } from './chat.js';
+import { getConversationId, loadTranscript } from './session.js';
+import { transcriptToMarkdown } from './transcript.js';
+import { displayName } from './folder-model.js';
+import { fileStamp, sanitizeFilename } from './util.js';
 
-// Extract raw text from xterm buffer (excluding initial PowerShell startup headers)
-export function getTerminalBufferText(folderId) {
-  const inst = termInstances[folderId];
-  if (!inst) return '';
+const isEnglish = () => getCurrentLang() === 'en';
 
-  let textLines = [];
+const exportFilename = (folder, kind) => {
+  const names = { transcript: ['Transcript', '대화기록'], screen: ['ChatExtract', '대화추출'] }[kind];
+  return `${sanitizeFilename(displayName(folder))}_${names[isEnglish() ? 0 : 1]}_${fileStamp()}.md`;
+};
 
-  if (inst.term && inst.term.buffer) {
-    const buffer = inst.term.buffer.active || inst.term.buffer.normal;
-    if (buffer) {
-      for (let i = 0; i < buffer.length; i++) {
-        const line = buffer.getLine(i);
-        if (!line) continue;
-
-        const lineStr = line.translateToString(true);
-
-        if (line.isWrapped && textLines.length > 0) {
-          textLines[textLines.length - 1] += lineStr;
-        } else {
-          textLines.push(lineStr);
-        }
-      }
-    }
-  }
-
-  const hasBufferContent = textLines.some((l) => l.trim().length > 0);
-
-  let resultLines = [];
-  if (hasBufferContent) {
-    resultLines = textLines;
-  } else if (inst.sessionRawText) {
-    const cleanRaw = inst.sessionRawText
-      .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n');
-    resultLines = cleanRaw.split('\n');
-  }
-
-  if (resultLines.length === 0) return '';
-
-  let cliStartIndex = 0;
-  for (let i = 0; i < resultLines.length; i++) {
-    const trimmed = resultLines[i].trim();
-    if (!trimmed) continue;
-
-    const isPowerShellStartup =
-      trimmed.includes('[PowerShell 세션 시작 중...]') ||
-      trimmed.startsWith('경로:') ||
-      trimmed.startsWith('실행 명령어:') ||
-      trimmed.includes('Windows PowerShell') ||
-      trimmed.includes('Copyright (C) Microsoft Corporation') ||
-      trimmed.includes('All rights reserved.') ||
-      trimmed.includes('Try the new cross-platform PowerShell') ||
-      trimmed.includes('Install the latest PowerShell');
-
-    if (isPowerShellStartup) {
-      cliStartIndex = i + 1;
-    } else {
-      break;
-    }
-  }
-
-  let filteredLines = resultLines.slice(cliStartIndex);
-
-  // Trim trailing whitespace on each line
-  let cleanedLines = filteredLines.map((line) => line.replace(/\s+$/, ''));
-
-  // Clean leading blank lines
-  while (cleanedLines.length > 0 && cleanedLines[0].trim() === '') {
-    cleanedLines.shift();
-  }
-
-  // Clean trailing blank lines
-  while (cleanedLines.length > 0 && cleanedLines[cleanedLines.length - 1].trim() === '') {
-    cleanedLines.pop();
-  }
-
-  // Fallback: if filtering resulted in empty text, return original non-blank lines
-  if (cleanedLines.length === 0 && resultLines.length > 0) {
-    const nonBlank = resultLines.map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim().length > 0);
-    if (nonBlank.length > 0) {
-      return nonBlank.join('\n');
-    }
-  }
-
-  // Collapse 3 or more consecutive blank lines down to a single blank line
-  return cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n');
+// Whole conversation from the CLI's history file, or null (no saved id / unsupported CLI)
+async function buildTranscriptMarkdown(folder) {
+  const id = getConversationId(folder);
+  if (!id) return null;
+  const transcript = await loadTranscript(folder, id);
+  return transcript.found && transcript.messages.length
+    ? transcriptToMarkdown(folder, displayName(folder), transcript, id)
+    : null;
 }
 
-export async function exportConversationChatRaw() {
-  const activeFolderId = getActiveFolderId();
-  if (!activeFolderId) {
-    alert(t('noActiveSessionStartFirst'));
-    return;
+// --- Screen buffer fallback (pure text cleanup) ---
+const STARTUP_LINE_TESTS = [
+  (s) => s.includes('[PowerShell 세션 시작 중...]'),
+  (s) => s.startsWith('경로:'),
+  (s) => s.startsWith('실행 명령어:'),
+  (s) => s.includes('Windows PowerShell'),
+  (s) => s.includes('Copyright (C) Microsoft Corporation'),
+  (s) => s.includes('All rights reserved.'),
+  (s) => s.includes('Try the new cross-platform PowerShell'),
+  (s) => s.includes('Install the latest PowerShell'),
+];
+const isStartupLine = (s) => STARTUP_LINE_TESTS.some((test) => test(s));
+
+// Lines after the PowerShell banner / launch header (blank lines between them are skipped too)
+const dropStartupHeader = (lines) => {
+  const firstReal = lines.findIndex((l) => l.trim() && !isStartupLine(l.trim()));
+  return firstReal < 0 ? [] : lines.slice(firstReal);
+};
+
+const trimBlankEdges = (lines) => {
+  const first = lines.findIndex((l) => l.trim());
+  if (first < 0) return [];
+  const last = lines.length - 1 - [...lines].reverse().findIndex((l) => l.trim());
+  return lines.slice(first, last + 1);
+};
+
+export function cleanTerminalText(lines) {
+  if (!lines.length) return '';
+  const cleaned = trimBlankEdges(dropStartupHeader(lines).map((l) => l.replace(/\s+$/, '')));
+  // Fallback: everything was header -> keep the non-blank original lines
+  const result = cleaned.length ? cleaned : lines.map((l) => l.replace(/\s+$/, '')).filter((l) => l.trim());
+  // Collapse 3 or more consecutive blank lines down to a single blank line
+  return result.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+// xterm buffer -> lines (wrapped rows joined). The scrollback holds up to 100k rows, so the
+// result is built in a local array (O(n)) instead of copying it per row; nothing leaks out.
+const bufferLines = (buffer) => {
+  const out = [];
+  for (let i = 0; i < buffer.length; i += 1) {
+    const line = buffer.getLine(i);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && out.length) out[out.length - 1] += text;
+    else out.push(text);
   }
+  return out;
+};
 
-  const folders = getFolders();
-  const folder = folders.find((f) => f.id === activeFolderId);
-  if (!folder) return;
+const rawLines = (raw) => raw
+  .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+  .replace(/\r\n?/g, '\n')
+  .split('\n');
 
-  const rawText = getTerminalBufferText(activeFolderId);
-  if (!rawText || rawText.trim().length === 0) {
-    alert(t('noContentToExtract'));
-    return;
-  }
+// Text of the current session as shown on screen
+export function getTerminalBufferText(folderId) {
+  const folder = getFolder(folderId);
+  if (folder && folder.runningMode === 'chat') return serializeChat(folderId);
+  const inst = termInstances[folderId];
+  if (!inst) return '';
+  const buffer = inst.term && inst.term.buffer && (inst.term.buffer.active || inst.term.buffer.normal);
+  const lines = buffer ? bufferLines(buffer) : [];
+  const hasContent = lines.some((l) => l.trim());
+  return cleanTerminalText(hasContent ? lines : rawLines(inst.sessionRawText || ''));
+}
 
+// --- Actions ---
+// Folder picker; focus goes back to the session afterwards
+async function pickTargetFolder(buttonId, folderId) {
   const selectedPath = await window.api.openFolder();
-  if (!selectedPath) return;
+  if (!selectedPath) return null;
+  const btn = document.getElementById(buttonId);
+  if (btn) btn.blur();
+  const inst = termInstances[folderId];
+  if (inst && inst.term) inst.term.focus();
+  return selectedPath;
+}
 
-  const btnExtractChat = document.getElementById('btn-extract-chat');
-  if (btnExtractChat) btnExtractChat.blur();
-  const inst = termInstances[activeFolderId];
-  if (inst && inst.term) {
-    inst.term.focus();
-  }
-
-  const displayName = getFolderDisplayName(folder).replace(/[\/\\:\*\?"<>\|]/g, '_');
-  const now = new Date();
-  const dateStr = now.getFullYear() +
-    String(now.getMonth() + 1).padStart(2, '0') +
-    String(now.getDate()).padStart(2, '0') + '_' +
-    String(now.getHours()).padStart(2, '0') +
-    String(now.getMinutes()).padStart(2, '0') +
-    String(now.getSeconds()).padStart(2, '0');
-
-  const currentLang = getCurrentLang();
-  const filename = currentLang === 'en'
-    ? `${displayName}_ChatExtract_${dateStr}.md`
-    : `${displayName}_대화추출_${dateStr}.md`;
-
-  const mdContent = `# AI CLI PowerShell Session Raw Extract
+const screenExtractMarkdown = (folder, rawText, now = new Date()) => `# AI CLI PowerShell Session Raw Extract
 - Folder: ${folder.path}
 - Timestamp: ${now.toLocaleString()}
 - CLI: ${folder.cli}
@@ -144,55 +116,78 @@ ${rawText}
 \`\`\`
 `;
 
+export async function exportConversationChatRaw() {
+  const folderId = getActiveFolderId();
+  if (!folderId) {
+    alert(t('noActiveSessionStartFirst'));
+    return;
+  }
+  const folder = getFolder(folderId);
+  if (!folder) return;
+
+  const transcriptMd = await buildTranscriptMarkdown(folder);
+  const rawText = transcriptMd ? '' : getTerminalBufferText(folderId);
+  if (!transcriptMd && !rawText.trim()) {
+    alert(t('noContentToExtract'));
+    return;
+  }
+  const selectedPath = await pickTargetFolder('btn-extract-chat', folderId);
+  if (!selectedPath) return;
+
   const res = await window.api.saveExportFile({
     folderPath: selectedPath,
-    filename: filename,
-    content: mdContent,
+    filename: exportFilename(folder, transcriptMd ? 'transcript' : 'screen'),
+    content: transcriptMd || screenExtractMarkdown(folder, rawText),
   });
+  alert(res && res.success
+    ? `${t('chatSavedSuccess')}${res.filePath}`
+    : `${t('chatSavedError')}${(res && res.error) || ''}`);
+}
 
-  if (res && res.success) {
-    alert(`${t('chatSavedSuccess')}${res.filePath}`);
-  } else {
-    alert(`${t('chatSavedError')}${res && res.error ? res.error : ''}`);
-  }
+const reportPrompt = (dir) => (isEnglish()
+  ? `Please summarize the current conversation concisely into key points and generate a PDF report file in the "${dir}" folder immediately. (Bullet points only, omit extra explanations)`
+  : `현재 대화 내용을 핵심 위주로 명확히 요약하여 "${dir}" 폴더에 PDF 보고서 파일로 즉시 생성해줘. (단답형 핵심 작성, 부연설명 생략)`);
+
+// Report from the full history file: saved next to the report, then handed to the AI,
+// so turns from before an app restart / compaction are included too
+async function buildReportPrompt(folder, selectedPath) {
+  const dir = selectedPath.replace(/\\/g, '/');
+  const transcriptMd = await buildTranscriptMarkdown(folder);
+  if (!transcriptMd) return reportPrompt(dir);
+  const saved = await window.api.saveExportFile({
+    folderPath: selectedPath,
+    filename: exportFilename(folder, 'transcript'),
+    content: transcriptMd,
+  });
+  return saved && saved.success && saved.filePath
+    ? t('reportPromptTranscript').replace('{file}', saved.filePath.replace(/\\/g, '/')).replace('{dir}', dir)
+    : reportPrompt(dir);
 }
 
 export async function exportConversationReportPDF() {
-  const activeFolderId = getActiveFolderId();
-  if (!activeFolderId) {
+  const folderId = getActiveFolderId();
+  if (!folderId) {
     alert(t('noActiveSessionForReport'));
     return;
   }
-
-  const folders = getFolders();
-  const folder = folders.find((f) => f.id === activeFolderId);
+  const folder = getFolder(folderId);
   if (!folder || !folder.isActive) {
     alert(t('sessionNotActive'));
     return;
   }
-
-  const selectedPath = await window.api.openFolder();
+  const selectedPath = await pickTargetFolder('btn-export-report', folderId);
   if (!selectedPath) return;
+  const promptText = await buildReportPrompt(folder, selectedPath);
 
-  const btnExportReport = document.getElementById('btn-export-report');
-  if (btnExportReport) btnExportReport.blur();
-  const inst = termInstances[activeFolderId];
-  if (inst && inst.term) {
-    inst.term.focus();
+  if (folder.runningMode === 'chat') {
+    if (!submitChatPrompt(folderId, promptText)) alert(t('chatBusy'));
+    focusChatInput(folderId);
+    return;
   }
-
-  const normalizedPath = selectedPath.replace(/\\/g, '/');
-  const currentLang = getCurrentLang();
-  const promptText = currentLang === 'en'
-    ? `Please summarize the current conversation concisely into key points and generate a PDF report file in the "${normalizedPath}" folder immediately. (Bullet points only, omit extra explanations)`
-    : `현재 대화 내용을 핵심 위주로 명확히 요약하여 "${normalizedPath}" 폴더에 PDF 보고서 파일로 즉시 생성해줘. (단답형 핵심 작성, 부연설명 생략)`;
-
-  await window.api.writePty({ sessionId: activeFolderId, data: promptText });
-
+  await window.api.writePty({ sessionId: folderId, data: promptText });
   setTimeout(() => {
-    window.api.writePty({ sessionId: activeFolderId, data: '\r' });
-    if (inst && inst.term) {
-      inst.term.focus();
-    }
+    window.api.writePty({ sessionId: folderId, data: '\r' });
+    const inst = termInstances[folderId];
+    if (inst && inst.term) inst.term.focus();
   }, 60);
 }

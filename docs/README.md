@@ -53,8 +53,8 @@ npm run tauri:build
 
 Once the build finishes, binaries will be generated at:
 - **Standalone Executable**: `src-tauri/target/release/acpl.exe` (~9MB)
-- **Setup Installer (.exe)**: `src-tauri/target/release/bundle/nsis/ACPL_1.0.2_x64-setup.exe` (~2MB)
-- **MSI Package**: `src-tauri/target/release/bundle/msi/ACPL_1.0.2_x64_en-US.msi`
+- **Setup Installer (.exe)**: `src-tauri/target/release/bundle/nsis/ACPL_<version>_x64-setup.exe` (~2MB)
+- **MSI Package**: `src-tauri/target/release/bundle/msi/ACPL_<version>_x64_en-US.msi`
 
 ---
 
@@ -63,3 +63,7 @@ Once the build finishes, binaries will be generated at:
 - **Author**: frost-ix
 - **GitHub**: https://github.com/frost-ix
 - **Inquiries / Feedback**: Please submit via Issues or the Repository.
+
+## 📄 License
+
+MIT License — see [LICENSE](../LICENSE)

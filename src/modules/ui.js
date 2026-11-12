@@ -3,7 +3,9 @@
 import { t, getCurrentLang } from './i18n.js';
 import {
   getFolders,
-  setFolders,
+  getFolder,
+  updateFolder,
+  updateFolders,
   getActiveFolderId,
   setActiveFolderId,
   getPendingCloseFolderId,
@@ -13,7 +15,7 @@ import {
   getWelcomeContainerInstance,
   setWelcomeContainerInstance,
   termInstances,
-  hasAutoCheckedUsageMap
+  chatInstances
 } from './state.js';
 import { saveAllConfig, debouncedSaveConfig } from './config.js';
 import {
@@ -23,612 +25,760 @@ import {
   updateXtermTheme,
   getQuotaDisplayText
 } from './terminal.js';
+import {
+  getViewMode,
+  startChatSession,
+  resetChat,
+  destroyChatInstance,
+  refreshChatTexts,
+  focusChatInput
+} from './chat.js';
+import { runUsageProbe, applyCachedUsage } from './usage.js';
+import {
+  KNOWN_CLIS,
+  touchFolder,
+  togglePinned,
+  patchFolder,
+  getFolderSections,
+  isSectionCollapsed,
+  toggleSection,
+  UNGROUPED,
+  addGroup,
+  renameGroup,
+  removeGroup,
+  moveGroup,
+  setFolderGroup,
+  getDiscovered,
+  refreshDiscovered,
+  addOrSelectFolderByPath,
+  suggestCli,
+  getScanRoots,
+  addScanRoot,
+  removeScanRoot
+} from './folders.js';
+import { openFolderSettings } from './folder-settings.js';
+import {
+  resolveResumeId,
+  buildSessionCommand,
+  watchForNewSession,
+  stopSessionWatch,
+  flushSessionWatch
+} from './session.js';
 
-let tabUsageUpdateTimer = null;
+import { displayName, badgeText } from './folder-model.js';
+import {
+  escapeHtml,
+  basename,
+  shortPath,
+  formatAgo as formatAgoWith,
+  formatDuration,
+  debounce
+} from './util.js';
+import { inlineInput, onActions } from './dom.js';
+import { setTitlebarText, refreshTitlebarTexts } from './titlebar.js';
+import { systemStatusSlot } from './sysmon.js';
 
-export function getFolderBasename(folderPath) {
-  if (!folderPath) return 'New Folder';
-  const parts = folderPath.replace(/\\/g, '/').split('/').filter(Boolean);
-  return parts[parts.length - 1] || folderPath;
+// Show one runtime container (terminal / chat / welcome), hide the rest
+const setVisible = (el, visible, display = 'block') => {
+  el.classList.toggle('active', visible);
+  el.style.display = visible ? display : 'none';
+};
+
+function hideAllChatContainers() {
+  Object.values(chatInstances).forEach((c) => setVisible(c.container, false));
 }
 
-export function getFolderDisplayName(folder) {
-  if (folder.alias && folder.alias.trim().length > 0) {
-    return folder.alias.trim();
-  }
-  return getFolderBasename(folder.path);
-}
+const THEMES = {
+  light: { icon: '☀️', label: 'lightTheme' },
+  dark: { icon: '🌙', label: 'darkTheme' },
+};
 
-export function getShortBadgeText(folder) {
-  if (folder.alias && folder.alias.trim().length > 0) {
-    return folder.alias.trim().substring(0, 2);
-  }
-  const basename = getFolderBasename(folder.path);
-  const isEnglish = /^[a-zA-Z0-9_]/.test(basename);
-  if (isEnglish) {
-    return basename.substring(0, 3);
-  } else {
-    return basename.substring(0, 2);
-  }
-}
+const setText = (selector, text) => {
+  const el = document.querySelector(selector);
+  if (el) el.textContent = text;
+};
 
 export function applyTheme(theme) {
-  const newTheme = theme === 'light' ? 'light' : 'dark';
-  setCurrentTheme(newTheme);
-  document.body.className = 'theme-' + newTheme;
-
-  const themeIcon = document.getElementById('theme-icon');
-  const themeText = document.getElementById('theme-text');
-
-  if (newTheme === 'light') {
-    if (themeIcon) themeIcon.textContent = '☀️';
-    if (themeText) themeText.textContent = t('lightTheme');
-  } else {
-    if (themeIcon) themeIcon.textContent = '🌙';
-    if (themeText) themeText.textContent = t('darkTheme');
-  }
-
-  Object.keys(termInstances).forEach((id) => updateXtermTheme(termInstances[id]));
+  const name = theme === 'light' ? 'light' : 'dark';
+  setCurrentTheme(name);
+  document.body.className = `theme-${name}`;
+  setText('#theme-icon', THEMES[name].icon);
+  setText('#theme-text', t(THEMES[name].label));
+  Object.values(termInstances).forEach(updateXtermTheme);
 }
 
 export function toggleTheme() {
-  const newTheme = getCurrentTheme() === 'dark' ? 'light' : 'dark';
-  applyTheme(newTheme);
+  applyTheme(getCurrentTheme() === 'dark' ? 'light' : 'dark');
   saveAllConfig();
 }
 
+// Static texts of index.html: selector -> { text, title } i18n keys
+const STATIC_TEXTS = [
+  ['#btn-add-folder .sidebar-text', { text: 'addFolder' }],
+  ['#btn-new-group', { title: 'newGroupTitle' }],
+  ['#btn-new-group .new-group-btn-label', { text: 'newGroupBtn' }],
+  ['#btn-open-switcher', { title: 'switcherBtnTitle' }],
+  ['#btn-open-switcher .switcher-btn-label', { text: 'switcherBtn' }],
+  ['#btn-theme-toggle', { title: 'themeToggleTitle' }],
+  ['#select-lang', { title: 'langSelectTitle' }],
+  ['#btn-save', { title: 'saveConfigTitle' }],
+  ['#btn-save .sidebar-text', { text: 'saveConfigBtn' }],
+  ['#btn-extract-chat', { text: 'extractChatBtn', title: 'extractChatTitle' }],
+  ['#btn-export-report', { text: 'reportPdfBtn', title: 'reportPdfTitle' }],
+  ['#confirm-modal .modal-title', { text: 'modalCloseTitle' }],
+  ['#confirm-modal .modal-desc', { text: 'modalCloseDesc' }],
+  ['#modal-btn-confirm', { text: 'modalConfirm' }],
+  ['#modal-btn-cancel', { text: 'modalCancel' }],
+];
+
 export function updateUILanguage() {
-  const btnAddFolder = document.getElementById('btn-add-folder');
-  const btnCheckUsage = document.getElementById('btn-check-usage');
-  const btnThemeToggle = document.getElementById('btn-theme-toggle');
-  const themeText = document.getElementById('theme-text');
+  STATIC_TEXTS.forEach(([selector, keys]) => {
+    const el = document.querySelector(selector);
+    if (!el) return;
+    if (keys.text) el.textContent = t(keys.text);
+    if (keys.title) el.title = t(keys.title);
+  });
+  setText('#theme-text', t(THEMES[getCurrentTheme()].label));
+  refreshTitlebarTexts();
   const selectLang = document.getElementById('select-lang');
-  const btnSave = document.getElementById('btn-save');
-  const btnExtractChat = document.getElementById('btn-extract-chat');
-  const btnExportReport = document.getElementById('btn-export-report');
-  const confirmModal = document.getElementById('confirm-modal');
-  const modalBtnConfirm = document.getElementById('modal-btn-confirm');
-  const modalBtnCancel = document.getElementById('modal-btn-cancel');
-
-  const btnAddFolderSpan = btnAddFolder ? btnAddFolder.querySelector('.sidebar-text') : null;
-  if (btnAddFolderSpan) btnAddFolderSpan.textContent = t('addFolder');
-
-  if (btnCheckUsage) {
-    const btnCheckUsageSpan = btnCheckUsage.querySelector('.sidebar-text');
-    if (btnCheckUsageSpan) btnCheckUsageSpan.textContent = t('checkUsage');
-    btnCheckUsage.title = t('checkUsageTitle');
-  }
-
-  if (themeText) {
-    themeText.textContent = getCurrentTheme() === 'dark' ? t('darkTheme') : t('lightTheme');
-  }
-  if (btnThemeToggle) btnThemeToggle.title = t('themeToggleTitle');
-
-  if (selectLang) {
-    selectLang.value = getCurrentLang();
-    selectLang.title = t('langSelectTitle');
-  }
-
-  const statusBoxSpan = document.querySelector('.status-box .sidebar-text');
-  if (statusBoxSpan) statusBoxSpan.textContent = t('statusSyncing');
-  const statusBox = document.querySelector('.status-box');
-  if (statusBox) statusBox.title = t('statusSyncTitle');
-
-  if (btnSave) {
-    const btnSaveSpan = btnSave.querySelector('.sidebar-text');
-    if (btnSaveSpan) btnSaveSpan.textContent = t('saveConfigBtn');
-    btnSave.title = t('saveConfigTitle');
-  }
-
-  if (btnExtractChat) {
-    btnExtractChat.textContent = t('extractChatBtn');
-    btnExtractChat.title = t('extractChatTitle');
-  }
-
-  if (btnExportReport) {
-    btnExportReport.textContent = t('reportPdfBtn');
-    btnExportReport.title = t('reportPdfTitle');
-  }
-
-  if (confirmModal) {
-    const modalTitle = confirmModal.querySelector('.modal-title');
-    if (modalTitle) modalTitle.textContent = t('modalCloseTitle');
-    const modalDesc = confirmModal.querySelector('.modal-desc');
-    if (modalDesc) modalDesc.textContent = t('modalCloseDesc');
-    if (modalBtnConfirm) modalBtnConfirm.textContent = t('modalConfirm');
-    if (modalBtnCancel) modalBtnCancel.textContent = t('modalCancel');
-  }
+  if (selectLang) selectLang.value = getCurrentLang();
 
   renderFolderCards();
   renderSessionTabs();
+  renderUsageStatusBar();
+  Object.keys(chatInstances).forEach(refreshChatTexts);
 
-  let welcomeInstance = getWelcomeContainerInstance();
-  if (welcomeInstance && welcomeInstance.style.display !== 'none') {
-    renderWelcomeManual(true);
-  }
+  const welcome = getWelcomeContainerInstance();
+  if (welcome && welcome.style.display !== 'none') renderWelcomeManual(true);
 }
 
-export function syncInputValuesToFolders() {
-  const folderListContainer = document.getElementById('folder-list-container');
-  if (!folderListContainer) return;
-  const cards = folderListContainer.querySelectorAll('.folder-card');
-  const folders = getFolders();
+const WELCOME_STEPS = 6;
 
-  cards.forEach((card) => {
-    const folderId = card.getAttribute('data-folder-id');
-    const folder = folders.find((f) => f.id === folderId);
-    if (folder) {
-      const aliasInput = card.querySelector('[data-action="alias-input"]');
-      const cliSelect = card.querySelector('[data-action="cli-change"]');
-      const customInput = card.querySelector('[data-action="custom-cmd"]');
-
-      if (aliasInput) folder.alias = aliasInput.value;
-      if (cliSelect) folder.cli = cliSelect.value;
-      if (customInput) folder.customCommand = customInput.value;
-    }
-  });
-}
+const welcomeHtml = () => `
+  <div class="welcome-manual-card">
+    <div class="welcome-title-row">
+      <span style="font-size: 1.5rem;">⚡</span>
+      <h2>${t('welcomeHeader')}</h2>
+    </div>
+    <div class="welcome-step-list">
+      ${Array.from({ length: WELCOME_STEPS }, (_, i) => `
+        <div class="welcome-step-item">
+          <span class="welcome-step-num">${i + 1}.</span>
+          <span>${t(`welcomeStep${i + 1}`)}</span>
+        </div>`).join('')}
+    </div>
+    <div class="welcome-note-box"><div>${t('welcomeNote')}</div></div>
+    <div class="welcome-tip-box">${t('welcomeTip')}</div>
+    <div class="welcome-footer-action">${t('welcomeFooter')}</div>
+    <div class="welcome-credits">${t('welcomeCredits')}</div>
+  </div>`;
 
 export function renderWelcomeManual(force = false) {
   let welcomeInstance = getWelcomeContainerInstance();
-  const terminalsWrapper = document.getElementById('terminals-wrapper');
-
-  if (!welcomeInstance || force) {
-    const manualCardHTML = `
-      <div class="welcome-manual-card">
-        <div class="welcome-title-row">
-          <span style="font-size: 1.5rem;">⚡</span>
-          <h2>${t('welcomeHeader')}</h2>
-        </div>
-
-        <div class="welcome-step-list">
-          <div class="welcome-step-item">
-            <span class="welcome-step-num">1.</span>
-            <span>${t('welcomeStep1')}</span>
-          </div>
-          <div class="welcome-step-item">
-            <span class="welcome-step-num">2.</span>
-            <span>${t('welcomeStep2')}</span>
-          </div>
-          <div class="welcome-step-item">
-            <span class="welcome-step-num">3.</span>
-            <span>${t('welcomeStep3')}</span>
-          </div>
-          <div class="welcome-step-item">
-            <span class="welcome-step-num">4.</span>
-            <span>${t('welcomeStep4')}</span>
-          </div>
-          <div class="welcome-step-item">
-            <span class="welcome-step-num">5.</span>
-            <span>${t('welcomeStep5')}</span>
-          </div>
-          <div class="welcome-step-item">
-            <span class="welcome-step-num">6.</span>
-            <span>${t('welcomeStep6')}</span>
-          </div>
-        </div>
-
-        <div class="welcome-note-box">
-          <div>${t('welcomeNote')}</div>
-        </div>
-
-        <div class="welcome-tip-box">
-          ${t('welcomeTip')}
-        </div>
-
-        <div class="welcome-footer-action">
-          ${t('welcomeFooter')}
-        </div>
-
-        <div class="welcome-credits">
-          ${t('welcomeCredits')}
-        </div>
-      </div>
-    `;
-
-    if (welcomeInstance && force) {
-      welcomeInstance.innerHTML = manualCardHTML;
-    } else if (!welcomeInstance) {
-      const welcomeDiv = document.createElement('div');
-      welcomeDiv.className = 'terminal-instance welcome-manual-container';
-      welcomeDiv.id = 'term-container-welcome';
-      welcomeDiv.innerHTML = manualCardHTML;
-      terminalsWrapper.appendChild(welcomeDiv);
-      welcomeInstance = welcomeDiv;
-      setWelcomeContainerInstance(welcomeInstance);
-    }
+  if (!welcomeInstance) {
+    welcomeInstance = document.createElement('div');
+    welcomeInstance.className = 'terminal-instance welcome-manual-container';
+    welcomeInstance.id = 'term-container-welcome';
+    welcomeInstance.innerHTML = welcomeHtml();
+    document.getElementById('terminals-wrapper').appendChild(welcomeInstance);
+    setWelcomeContainerInstance(welcomeInstance);
+  } else if (force) {
+    welcomeInstance.innerHTML = welcomeHtml();
   }
 
-  Object.keys(termInstances).forEach((id) => {
-    const inst = termInstances[id];
-    inst.container.classList.remove('active');
-    inst.container.style.display = 'none';
-  });
+  Object.values(termInstances).forEach((inst) => setVisible(inst.container, false));
+  hideAllChatContainers();
+  setVisible(welcomeInstance, true, 'flex');
+}
 
-  welcomeInstance.style.display = 'flex';
-  welcomeInstance.classList.add('active');
+// Highlight the selected row; re-render when a row has to appear in (or leave) a folded section
+function syncSelectedRow(folderId) {
+  const list = document.getElementById('folder-list-container');
+  if (!list) return;
+  const rowOf = (id) => list.querySelector(`.folder-card[data-folder-id="${CSS.escape(id)}"]`);
+  // A folder shown only because it was selected inside a folded group -> hide it again
+  const stale = [...list.querySelectorAll('.folder-card.kept-selected')]
+    .some((c) => c.getAttribute('data-folder-id') !== folderId);
+  if (stale || (folderId && !rowOf(folderId))) renderFolderCards();
+  list.querySelectorAll('.folder-card').forEach((c) => {
+    c.classList.toggle('active-selected', c.getAttribute('data-folder-id') === folderId);
+  });
+  const row = folderId && rowOf(folderId);
+  if (row) row.scrollIntoView({ block: 'nearest' });
 }
 
 export function selectActiveFolder(folderId, isLaunching = false) {
   setActiveFolderId(folderId);
-
-  const folderListContainer = document.getElementById('folder-list-container');
-  if (folderListContainer) {
-    const allCards = folderListContainer.querySelectorAll('.folder-card');
-    allCards.forEach((c) => {
-      if (c.getAttribute('data-folder-id') === folderId) {
-        c.classList.add('active-selected');
-      } else {
-        c.classList.remove('active-selected');
-      }
-    });
-  }
-
+  syncSelectedRow(folderId);
   renderSessionTabs();
+  renderUsageStatusBar();
 
-  const folders = getFolders();
-  const targetFolder = folders.find((f) => f.id === folderId);
-  const hasAnyActiveSession = folders.some((f) => f.isActive);
-  let welcomeInstance = getWelcomeContainerInstance();
-
-  if (!hasAnyActiveSession && !isLaunching && (!targetFolder || !targetFolder.isActive)) {
+  const target = getFolder(folderId);
+  setTitlebarText(target ? displayName(target) : '');
+  if (!isLaunching && !getFolders().some((f) => f.isActive) && !(target && target.isActive)) {
     renderWelcomeManual();
     return;
   }
+  const welcome = getWelcomeContainerInstance();
+  if (welcome) setVisible(welcome, false);
 
-  if (welcomeInstance) {
-    welcomeInstance.classList.remove('active');
-    welcomeInstance.style.display = 'none';
+  const showChat = !!(target && target.runningMode === 'chat' && chatInstances[folderId]);
+  Object.entries(chatInstances).forEach(([id, chat]) => setVisible(chat.container, showChat && id === folderId, 'flex'));
+  if (showChat) focusChatInput(folderId);
+
+  Object.entries(termInstances).forEach(([id, inst]) => setVisible(inst.container, id === folderId && !showChat));
+  if (!showChat && termInstances[folderId]) {
+    requestAnimationFrame(() => setTimeout(() => fitAndResizeTerminal(folderId), 30));
   }
-
-  Object.keys(termInstances).forEach((id) => {
-    const inst = termInstances[id];
-    if (id === folderId) {
-      inst.container.style.display = 'block';
-      inst.container.classList.add('active');
-      requestAnimationFrame(() => {
-        setTimeout(() => fitAndResizeTerminal(folderId), 30);
-      });
-    } else {
-      inst.container.classList.remove('active');
-      inst.container.style.display = 'none';
-    }
-  });
 }
 
-export async function launchFolderSession(folderId) {
-  syncInputValuesToFolders();
-  const folders = getFolders();
-  const folder = folders.find((f) => f.id === folderId);
-  if (!folder) return;
+const ansiLine = (color, text) => `\x1b[${color}m${text}\x1b[0m\r\n`;
 
-  if (folder.isActive) {
-    await window.api.killPty({ sessionId: folderId });
+// Chat (speech bubble) mode: no PTY, each message runs the CLI in JSON mode through PowerShell
+function launchChat(folderId, resumeId) {
+  updateFolder(folderId, { runningMode: 'chat', isActive: true });
+  const termInst = termInstances[folderId];
+  if (termInst) {
+    termInst.isSpawned = false;
+    termInst.term.clear();
   }
+  startChatSession(folderId, resumeId);
+}
 
-  let inst = termInstances[folderId];
-  if (!inst) {
-    inst = createTerminalInstance(folderId);
-  }
-
+async function launchTerminal(folderId, resumeId) {
+  const folder = updateFolder(folderId, { runningMode: 'terminal' });
+  resetChat(folderId);
+  const inst = termInstances[folderId] || createTerminalInstance(folderId);
   selectActiveFolder(folderId, true);
 
-  const commandToRun = getCommandToRun(folder.cli, folder.customCommand);
-
+  const { command, resumed } = buildSessionCommand(folder, getCommandToRun(folder.cli, folder.customCommand), resumeId);
+  const launchedAt = Date.now();
   inst.term.clear();
   inst.sessionRawText = '';
-  inst.term.write(`\x1b[32m[${t('startingSession')}]\x1b[0m\r\n`);
-  inst.term.write(`\x1b[36m${t('pathLabel')}: ${folder.path}\x1b[0m\r\n`);
-  if (commandToRun) {
-    inst.term.write(`\x1b[36m${t('commandLabel')}: ${commandToRun}\x1b[0m\r\n\r\n`);
-  }
-
+  inst.term.write(ansiLine(32, `[${t(resumed ? 'resumingSession' : 'startingSession')}]`));
+  inst.term.write(ansiLine(36, `${t('pathLabel')}: ${folder.path}`));
+  if (command) inst.term.write(`${ansiLine(36, `${t('commandLabel')}: ${command}`)}\r\n`);
   fitAndResizeTerminal(folderId);
 
   const result = await window.api.spawnPty({
     sessionId: folderId,
     folderPath: folder.path,
-    commandToRun,
+    commandToRun: command,
     cols: inst.term.cols || 80,
     rows: inst.term.rows || 30,
   });
-
-  if (result.success) {
-    folder.isActive = true;
-    if (!folder.usage) folder.usage = { tokens: 0, cost: 0.0, sessionQuota: null, weekQuota: null };
-    inst.isSpawned = true;
-
-    hasAutoCheckedUsageMap[folderId] = false;
-  } else {
-    folder.isActive = false;
-    inst.term.write(`\x1b[31m[${t('sessionLaunchFailed')}${result.error}]\x1b[0m\r\n`);
+  updateFolder(folderId, { isActive: !!result.success });
+  inst.isSpawned = !!result.success;
+  if (!result.success) {
+    inst.term.write(ansiLine(31, `[${t('sessionLaunchFailed')}${result.error}]`));
+    return false;
   }
+  // codex / agy choose their own id -> pick it up from disk once the conversation starts
+  if (!resumed) watchForNewSession(getFolder(folderId), launchedAt);
+  return true;
+}
+
+// Folders whose launch is in progress (a second launch would kill and restart the first)
+let launching = Object.freeze([]);
+const setLaunching = (id, on) => {
+  launching = Object.freeze(on ? [...launching, id] : launching.filter((x) => x !== id));
+};
+
+export async function launchFolderSession(folderId) {
+  if (launching.includes(folderId)) return;
+  setLaunching(folderId, true);
+  try {
+    await launchFolderSessionNow(folderId);
+  } finally {
+    setLaunching(folderId, false);
+  }
+}
+
+async function launchFolderSessionNow(folderId) {
+  const folder = getFolder(folderId);
+  if (!folder) return;
+  if (folder.isActive) await window.api.killPty({ sessionId: folderId });
+
+  stopSessionWatch(folderId);
+  applyCachedUsage(folderId);
+  touchFolder(folderId);
+
+  // Saved conversation of this folder (null = new conversation)
+  const resumeId = await resolveResumeId(getFolder(folderId));
+  const started = getViewMode(folder) === 'chat'
+    ? (launchChat(folderId, resumeId), true)
+    : await launchTerminal(folderId, resumeId);
 
   renderFolderCards();
   selectActiveFolder(folderId);
   debouncedSaveConfig();
+  if (started) runUsageProbe(folder.cli);
 }
 
 export function openCloseModal(folderId) {
-  const folders = getFolders();
-  const folder = folders.find((f) => f.id === folderId);
+  const folder = getFolder(folderId);
   if (!folder) return;
-
   if (!folder.isActive) {
     alert(t('noActiveSession'));
     return;
   }
-
   setPendingCloseFolderId(folderId);
-  const displayName = getFolderDisplayName(folder);
+  const name = displayName(folder);
   const cliName = folder.cli.toUpperCase();
-
-  const confirmModal = document.getElementById('confirm-modal');
-  const modalSessionDesc = document.getElementById('modal-session-desc');
-  const currentLang = getCurrentLang();
-
-  if (modalSessionDesc) {
-    modalSessionDesc.textContent = currentLang === 'en'
-      ? `Are you sure you want to terminate [${displayName}] (${cliName}) session and running CLI?`
-      : `[${displayName}] (${cliName}) 세션 및 실행 중인 CLI를 종료하시겠습니까?`;
+  const desc = document.getElementById('modal-session-desc');
+  if (desc) {
+    desc.textContent = getCurrentLang() === 'en'
+      ? `Are you sure you want to terminate [${name}] (${cliName}) session and running CLI?`
+      : `[${name}] (${cliName}) 세션 및 실행 중인 CLI를 종료하시겠습니까?`;
   }
-  if (confirmModal) {
-    confirmModal.classList.remove('hidden');
-  }
+  const modal = document.getElementById('confirm-modal');
+  if (modal) modal.classList.remove('hidden');
 }
 
+// Re-render the list and show `nextId` (or the welcome card when there is none)
+function showFolderOrWelcome(nextId) {
+  renderFolderCards();
+  renderSessionTabs();
+  if (nextId) selectActiveFolder(nextId);
+  else renderWelcomeManual();
+}
+
+const firstRunningId = () => (getFolders().find((f) => f.isActive) || {}).id || null;
+
 export async function closeFolderSessionConfirmed() {
-  const pendingId = getPendingCloseFolderId();
-  if (!pendingId) return;
-
-  const folderId = pendingId;
+  const folderId = getPendingCloseFolderId();
+  if (!folderId) return;
   setPendingCloseFolderId(null);
+  const modal = document.getElementById('confirm-modal');
+  if (modal) modal.classList.add('hidden');
 
-  const confirmModal = document.getElementById('confirm-modal');
-  if (confirmModal) confirmModal.classList.add('hidden');
-
-  const folders = getFolders();
-  const folder = folders.find((f) => f.id === folderId);
-  if (folder) {
-    folder.isActive = false;
-  }
-
-  await window.api.killPty({ sessionId: folderId });
+  const folder = getFolder(folderId);
+  if (folder) updateFolder(folderId, { isActive: false });
+  flushSessionWatch(folderId);
+  if (folder && folder.runningMode === 'chat') resetChat(folderId);
+  else await window.api.killPty({ sessionId: folderId });
 
   const inst = termInstances[folderId];
   if (inst) {
     inst.isSpawned = false;
     inst.term.clear();
   }
+  showFolderOrWelcome(firstRunningId());
+}
 
-  const activeFolders = folders.filter((f) => f.isActive);
-  if (activeFolders.length > 0) {
-    selectActiveFolder(activeFolders[0].id);
-  } else {
-    renderFolderCards();
-    renderSessionTabs();
-    renderWelcomeManual();
+function disposeTerminal(folderId) {
+  const inst = termInstances[folderId];
+  if (!inst) return;
+  try {
+    if (inst.term) inst.term.dispose();
+  } catch (e) {
+    // already disposed
   }
+  if (inst.container) inst.container.remove();
+  delete termInstances[folderId];
 }
 
 export function removeFolderCard(folderId) {
+  stopSessionWatch(folderId);
   window.api.killPty({ sessionId: folderId });
+  destroyChatInstance(folderId);
+  disposeTerminal(folderId);
+  updateFolders((list) => list.filter((f) => f.id !== folderId));
 
-  const terminalsWrapper = document.getElementById('terminals-wrapper');
-  if (termInstances[folderId]) {
-    try {
-      if (termInstances[folderId].term) {
-        termInstances[folderId].term.dispose();
-      }
-    } catch (e) {}
-    if (termInstances[folderId].container && termInstances[folderId].container.parentNode) {
-      terminalsWrapper.removeChild(termInstances[folderId].container);
-    }
-    delete termInstances[folderId];
-  }
-
-  let folders = getFolders();
-  folders = folders.filter((f) => f.id !== folderId);
-  setFolders(folders);
-
-  let activeFolderId = getActiveFolderId();
-  if (activeFolderId === folderId) {
-    const activeFolders = folders.filter((f) => f.isActive);
-    if (activeFolders.length > 0) {
-      activeFolderId = activeFolders[0].id;
-    } else if (folders.length > 0) {
-      activeFolderId = folders[0].id;
-    } else {
-      activeFolderId = null;
-    }
-  }
-
-  renderFolderCards();
-  renderSessionTabs();
-
-  if (activeFolderId) {
-    selectActiveFolder(activeFolderId);
-  } else {
-    renderWelcomeManual();
-  }
-
+  // The removed folder was selected: fall back to a running one, else the first folder
+  const current = getActiveFolderId();
+  const first = getFolders()[0];
+  showFolderOrWelcome(current !== folderId ? current : firstRunningId() || (first && first.id) || null);
   saveAllConfig();
 }
 
-export function renderFolderCards() {
-  syncInputValuesToFolders();
-  const folderListContainer = document.getElementById('folder-list-container');
-  if (!folderListContainer) return;
-  folderListContainer.innerHTML = '';
+const CLI_SHORT = { claude: 'claude', antigravity: 'agy', codex: 'codex', etc: 'etc' };
 
-  const folders = getFolders();
-  const activeFolderId = getActiveFolderId();
+const agoLabels = () => ({ now: t('agoJustNow'), minutes: t('agoMinutes'), hours: t('agoHours'), days: t('agoDays') });
+const formatAgo = (ms) => formatAgoWith(ms, agoLabels());
 
-  folders.forEach((folder) => {
-    if (typeof folder.isExpanded === 'undefined') {
-      folder.isExpanded = false;
-    }
+// Pure: inner HTML of a folder row. Two lines:  ● name ................ 📌 ⚙ ▶ ⏹
+//                                                [cli] …\parent\name        3h ago
+// The class names (folder-card, folder-info, folder-badge-tag, ...) are kept for the
+// collapsed-sidebar styles.
+// Collapsed sidebar only: one button in the card corner. It shows the status dot and turns
+// into ▶ (not running) or ⏹ (running) while the pointer is on the button itself.
+const runToggleHtml = (folder) => {
+  const running = !!folder.isActive;
+  return `<button class="btn-run-toggle ${running ? 'running' : ''}" data-action="${running ? 'close' : 'launch'}"
+    title="${escapeHtml(t(running ? 'closeBtnTitleActive' : 'launchBtnTitle'))}">
+    <span class="rt-dot"></span><span class="rt-icon">${running ? '⏹' : '▶'}</span></button>`;
+};
 
-    const isSelected = folder.id === activeFolderId;
-    const card = document.createElement('div');
-    card.className = `folder-card ${isSelected ? 'active-selected' : ''} ${folder.isExpanded ? 'expanded' : 'collapsed'}`;
-    card.setAttribute('data-folder-id', folder.id);
-
-    const displayName = getFolderDisplayName(folder);
-    const badgeText = getShortBadgeText(folder);
-    const toggleIcon = folder.isExpanded ? '▼' : '▶';
-
-    card.innerHTML = `
-      <div class="folder-card-header" data-action="toggle-header">
-        <span class="folder-toggle-icon" data-action="toggle-header">${toggleIcon}</span>
-        <div class="folder-info" title="${folder.path}">
-          <div class="status-dot ${folder.isActive ? 'active' : 'inactive'}" title="${folder.isActive ? t('sessionActiveDot') : t('sessionInactiveDot')}"></div>
-          <span class="folder-badge-tag">${badgeText}</span>
-          <div class="folder-name-group">
-            <span class="folder-path-text">📁 ${displayName}</span>
-          </div>
-        </div>
-        <div class="folder-card-header-actions">
-          <button class="btn-card-launch-mini" data-action="launch" title="${t('launchBtnTitle')}">▶</button>
-          <button class="btn-card-close-mini ${folder.isActive ? 'active' : 'disabled'}" data-action="close" title="${folder.isActive ? t('closeBtnTitleActive') : t('closeBtnTitleDisabled')}">⏹</button>
-        </div>
+const folderRowHtml = (folder) => {
+  const path = escapeHtml(folder.path);
+  const cliOptions = KNOWN_CLIS
+    .map((c) => `<option value="${c}" ${folder.cli === c ? 'selected' : ''}>${CLI_SHORT[c]}</option>`)
+    .join('');
+  return `
+    <div class="folder-card-header">
+      <div class="folder-info" title="${path}">
+        <div class="status-dot ${folder.isActive ? 'active' : 'inactive'}" title="${folder.isActive ? t('sessionActiveDot') : t('sessionInactiveDot')}"></div>
+        <span class="folder-badge-tag">${escapeHtml(badgeText(folder))}</span>
+        ${runToggleHtml(folder)}
+        <div class="folder-name-group"><span class="folder-path-text">${escapeHtml(displayName(folder))}</span></div>
+        ${folder.missing ? `<span class="folder-missing" title="${escapeHtml(t('missingPathTitle'))}">⚠</span>` : ''}
       </div>
-
-      <div class="folder-card-body ${folder.isExpanded ? '' : 'hidden'}">
-        <div class="folder-card-subpath" title="${folder.path}">${folder.path}</div>
-        <div class="folder-card-controls">
-          <input type="text" class="folder-alias-input" data-action="alias-input" 
-                 placeholder="${t('aliasPlaceholder')}" value="${folder.alias || ''}" spellcheck="false" autocomplete="off" />
-
-          <select class="cli-select-sm" data-action="cli-change">
-            <option value="claude" ${folder.cli === 'claude' ? 'selected' : ''}>Claude (claude)</option>
-            <option value="antigravity" ${folder.cli === 'antigravity' ? 'selected' : ''}>Antigravity (agy)</option>
-            <option value="codex" ${folder.cli === 'codex' ? 'selected' : ''}>Codex (codex)</option>
-            <option value="etc" ${folder.cli === 'etc' ? 'selected' : ''}>Etc.. (${t('customInputLabel')})</option>
-          </select>
-
-          <input type="text" class="input-custom-sm ${folder.cli === 'etc' ? '' : 'hidden'}" 
-                 data-action="custom-cmd" 
-                 placeholder="${t('customCmdPlaceholder')}" 
-                 value="${folder.customCommand || ''}" spellcheck="false" autocomplete="off" />
-        </div>
-
-        <div class="folder-card-actions">
-          <button class="btn-card-action btn-card-delete-full" data-action="delete" title="${t('deleteFolderTitle')}">${t('deleteFolderBtn')}</button>
-        </div>
+      <div class="folder-card-header-actions">
+        <button class="btn-row-icon btn-row-pin ${folder.pinned ? 'on' : ''}" data-action="pin" title="${t(folder.pinned ? 'unpinTitle' : 'pinTitle')}">📌</button>
+        <button class="btn-row-icon" data-action="settings" title="${t('folderSettingsTitle')}">⚙</button>
+        <button class="btn-card-launch-mini" data-action="launch" title="${t('launchBtnTitle')}">▶</button>
+        ${folder.isActive ? `<button class="btn-card-close-mini active" data-action="close" title="${t('closeBtnTitleActive')}">⏹</button>` : ''}
       </div>
-    `;
+    </div>
+    <div class="folder-row-sub">
+      <select class="row-cli-select" data-action="cli-quick" title="${escapeHtml(t('cliQuickTitle'))}" ${folder.isActive ? 'disabled' : ''}>${cliOptions}</select>
+      <span class="folder-row-path" title="${path}">${escapeHtml(shortPath(folder.path))}</span>
+      <span class="folder-row-ago">${escapeHtml(formatAgo(folder.lastUsedAt))}</span>
+    </div>`;
+};
 
-    card.addEventListener('click', (e) => {
-      const actionBtn = e.target.closest('[data-action]');
-      const action = actionBtn ? actionBtn.getAttribute('data-action') : null;
+function renderFolderRow(folder, activeFolderId) {
+  const id = folder.id;
+  const row = document.createElement('div');
+  row.className = [
+    'folder-card folder-row',
+    id === activeFolderId ? 'active-selected' : '',
+    folder.missing ? 'missing' : '',
+    folder.archived ? 'archived' : '',
+  ].filter(Boolean).join(' ');
+  row.setAttribute('data-folder-id', id);
+  row.title = `${displayName(folder)} (${folder.cli})\n${folder.path}`; // the collapsed sidebar shows only the badge
+  row.innerHTML = folderRowHtml(folder);
 
-      if (action === 'delete') {
-        e.stopPropagation();
-        e.preventDefault();
-        removeFolderCard(folder.id);
-      } else if (action === 'launch') {
-        e.stopPropagation();
-        e.preventDefault();
-        launchFolderSession(folder.id);
-      } else if (action === 'close') {
-        e.stopPropagation();
-        e.preventDefault();
-        openCloseModal(folder.id);
-      } else if (action === 'toggle-header') {
-        e.stopPropagation();
-        folder.isExpanded = !folder.isExpanded;
-        selectActiveFolder(folder.id);
-        renderFolderCards();
-      } else {
-        selectActiveFolder(folder.id);
-      }
-    });
+  row.addEventListener('mousedown', (e) => startRowDrag(e, id));
+  // e.detail > 1: 2nd click of a double click — one run / stop per gesture
+  const once = (fn) => (el, e) => { if (!e || e.detail <= 1) fn(); };
+  onActions(row, {
+    launch: once(() => launchFolderSession(id)),
+    close: once(() => openCloseModal(id)),
+    settings: () => openFolderSettings(id),
+    pin: () => {
+      togglePinned(id);
+      renderFolderCards();
+    },
+  });
+  // Any other click selects the folder (the CLI select handles its own clicks)
+  row.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-action]')) selectActiveFolder(id);
+  });
+  // Double click = launch (or just show it when it is already running)
+  row.addEventListener('dblclick', (e) => {
+    if (e.target.closest('[data-action]')) return;
+    if ((getFolder(id) || {}).isActive) selectActiveFolder(id);
+    else launchFolderSession(id);
+  });
+  row.querySelector('[data-action="cli-quick"]').addEventListener('change', (e) => {
+    const next = patchFolder(id, { cli: e.target.value });
+    if (next.cli === 'etc' && !next.customCommand) openFolderSettings(id);
+  });
+  return row;
+}
 
-    const aliasInputEl = card.querySelector('[data-action="alias-input"]');
-    const cliSelectEl = card.querySelector('[data-action="cli-change"]');
-    const customInputEl = card.querySelector('[data-action="custom-cmd"]');
+// `mini`: short tag shown instead of the label when the sidebar is collapsed
+function renderSectionHeader(key, label, count, collapsed, extraHtml = '', mini = '') {
+  const el = document.createElement('div');
+  el.className = `folder-section-header ${collapsed ? 'collapsed' : ''}`;
+  el.setAttribute('data-section', key);
+  el.title = label;
+  el.innerHTML = `<span class="fs-caret">${collapsed ? '▸' : '▾'}</span><span class="fs-mini">${escapeHtml(mini)}</span><span class="fs-label">${escapeHtml(label)}</span><span class="fs-count">${count}</span>${extraHtml}`;
+  return el;
+}
 
-    [aliasInputEl, cliSelectEl, customInputEl].forEach((el) => {
-      if (!el) return;
-      el.addEventListener('click', (e) => e.stopPropagation());
-      el.addEventListener('mousedown', (e) => e.stopPropagation());
-      el.addEventListener('keydown', (e) => e.stopPropagation());
-      el.addEventListener('keyup', (e) => e.stopPropagation());
-    });
+const SECTION_MINI = { running: '▶', ungrouped: '📂', archived: '🗄' };
+const sectionMini = (section) => (section.group ? section.group.name.trim().slice(0, 2) : SECTION_MINI[section.kind] || '');
 
-    aliasInputEl.addEventListener('input', (e) => {
-      folder.alias = e.target.value;
-      const nameTextEl = card.querySelector('.folder-path-text');
-      const badgeTagEl = card.querySelector('.folder-badge-tag');
-      
-      if (nameTextEl) {
-        nameTextEl.textContent = '📁 ' + getFolderDisplayName(folder);
-      }
-      if (badgeTagEl) {
-        badgeTagEl.textContent = getShortBadgeText(folder);
-      }
-      debouncedRenderSessionTabs();
-      debouncedSaveConfig();
-    });
+const SECTION_LABELS = { running: 'sectionRunning', ungrouped: 'sectionUngrouped', archived: 'sectionArchived' };
 
-    cliSelectEl.addEventListener('change', (e) => {
-      folder.cli = e.target.value;
-      if (folder.cli === 'etc') {
-        customInputEl.classList.remove('hidden');
-      } else {
-        customInputEl.classList.add('hidden');
-      }
-      debouncedSaveConfig();
-    });
+const sectionLabel = (section) => (section.group ? `🗂 ${section.group.name}` : t(SECTION_LABELS[section.kind]));
 
-    customInputEl.addEventListener('input', (e) => {
-      folder.customCommand = e.target.value;
-      debouncedSaveConfig();
-    });
+const GROUP_ACTIONS_HTML = () => `
+  <span class="fs-group-actions">
+    <button class="btn-row-icon" data-action="group-up" title="${t('moveGroupUpTitle')}">↑</button>
+    <button class="btn-row-icon" data-action="group-down" title="${t('moveGroupDownTitle')}">↓</button>
+    <button class="btn-row-icon" data-action="group-rename" title="${t('renameGroupTitle')}">✎</button>
+    <button class="btn-row-icon" data-action="group-delete" title="${t('deleteGroupTitle')}">×</button>
+  </span>`;
 
-    folderListContainer.appendChild(card);
+// Store change followed by a fresh sidebar
+const andRender = (fn) => (...args) => {
+  fn(...args);
+  renderFolderCards();
+};
+
+function renameGroupInline(header, group) {
+  inlineInput(header.querySelector('.fs-label'), {
+    initial: group.name,
+    placeholder: t('newGroupPlaceholder'),
+    className: 'group-name-input',
+    onCommit: (name) => renameGroup(group.id, name),
+    onDone: renderFolderCards,
   });
 }
+
+function renderSection(section, activeFolderId) {
+  const { group } = section;
+  const collapsed = isSectionCollapsed(section);
+  const wrap = document.createElement('div');
+  wrap.className = `folder-section folder-section-${section.kind}`;
+  // Drop targets for dragging a folder into a group
+  if (section.kind === 'group') wrap.setAttribute('data-drop', group.id);
+  if (section.kind === 'ungrouped') wrap.setAttribute('data-drop', UNGROUPED);
+
+  const header = renderSectionHeader(section.key, sectionLabel(section), section.folders.length, collapsed, group ? GROUP_ACTIONS_HTML() : '', sectionMini(section));
+  if (group) {
+    onActions(header, {
+      'group-rename': () => renameGroupInline(header, group),
+      'group-delete': () => {
+        if (window.confirm(t('groupDeleteConfirm').replace('{name}', group.name))) andRender(removeGroup)(group.id);
+      },
+      'group-up': () => andRender(moveGroup)(group.id, -1),
+      'group-down': () => andRender(moveGroup)(group.id, 1),
+    });
+    header.addEventListener('dblclick', (e) => {
+      if (!e.target.closest('[data-action]')) renameGroupInline(header, group);
+    });
+  }
+  header.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-action]')) andRender(toggleSection)(section);
+  });
+  wrap.appendChild(header);
+
+  // The selected folder stays visible even inside a folded section (marked so it can be
+  // hidden again as soon as another folder gets selected, see syncSelectedRow)
+  section.folders
+    .filter((f) => !collapsed || f.id === activeFolderId)
+    .forEach((f) => {
+      const row = renderFolderRow(f, activeFolderId);
+      row.classList.toggle('kept-selected', collapsed);
+      wrap.appendChild(row);
+    });
+  if (!collapsed && !section.folders.length && section.kind === 'group') {
+    const empty = document.createElement('div');
+    empty.className = 'folder-section-empty';
+    empty.textContent = t('groupEmptyHint');
+    wrap.appendChild(empty);
+  }
+  return wrap;
+}
+
+// "New group" button in the sidebar (above "find folder"): swaps itself for a name input
+// of the same size. Enter = create, Esc / empty = cancel.
+export function startNewGroupInput() {
+  const btn = document.getElementById('btn-new-group');
+  if (!btn || btn.classList.contains('hidden')) return;
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar && sidebar.classList.contains('collapsed')) {
+    const toggle = document.getElementById('btn-toggle-sidebar');
+    if (toggle) toggle.click(); // the input needs the full-width sidebar
+  }
+  inlineInput(btn, {
+    mode: 'after',
+    placeholder: t('newGroupPlaceholder'),
+    className: 'new-group-input',
+    onCommit: andRender(addGroup),
+  });
+}
+
+export function renderFolderCards() {
+  const list = document.getElementById('folder-list-container');
+  if (!list) return;
+  const { scrollTop } = list;
+  const activeFolderId = getActiveFolderId();
+  list.replaceChildren(
+    ...getFolderSections(displayName).map((section) => renderSection(section, activeFolderId)),
+    renderDiscoveredSection()
+  );
+  list.scrollTop = scrollTop;
+}
+
+// --- Drag a folder row onto a group (mouse based: Tauri's file-drop handler blocks HTML5 DnD) ---
+const DRAG_THRESHOLD_PX = 6;
+
+function startRowDrag(e, folderId) {
+  if (e.button !== 0 || e.target.closest('[data-action]')) return;
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar && sidebar.classList.contains('collapsed')) return;
+  const start = { x: e.clientX, y: e.clientY };
+  let drag = null; // { ghost, target } once the pointer moved far enough
+
+  const clearTargets = () => document.querySelectorAll('.folder-section.drop-target')
+    .forEach((el) => el.classList.remove('drop-target'));
+
+  const onMove = (ev) => {
+    if (!drag) {
+      if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < DRAG_THRESHOLD_PX) return;
+      const ghost = document.createElement('div');
+      ghost.className = 'folder-drag-ghost';
+      ghost.textContent = displayName(getFolder(folderId));
+      document.body.appendChild(ghost);
+      document.body.classList.add('folder-dragging');
+      drag = { ghost, target: null };
+    }
+    drag.ghost.style.transform = `translate(${ev.clientX + 12}px, ${ev.clientY + 8}px)`;
+    const under = document.elementFromPoint(ev.clientX, ev.clientY);
+    const section = under && under.closest('.folder-section[data-drop]');
+    clearTargets();
+    if (section) section.classList.add('drop-target');
+    drag = { ...drag, target: section ? section.getAttribute('data-drop') : null };
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if (!drag) return;
+    drag.ghost.remove();
+    document.body.classList.remove('folder-dragging');
+    clearTargets();
+    if (drag.target === null) return;
+    const groupId = drag.target === UNGROUPED ? null : drag.target;
+    if (((getFolder(folderId) || {}).groupId || null) !== groupId) andRender(setFolderGroup)(folderId, groupId);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// --- Discovered projects (not registered yet) + root folders ---
+const DISCOVERED_SECTION = { key: 'discovered', kind: 'discovered' };
+const DISCOVER_SHOWN = 30;
+
+const rescanAndRender = async () => {
+  await refreshDiscovered(true);
+  renderFolderCards();
+};
+
+const discoverBodyHtml = (items) => `
+  <div class="discover-hint">${escapeHtml(t('discoverHint'))}</div>
+  ${items.length ? '' : `<div class="discover-empty">${escapeHtml(t('discoverEmpty'))}</div>`}
+  ${items.slice(0, DISCOVER_SHOWN).map((d, i) => `
+    <div class="discover-row" data-index="${i}" title="${escapeHtml(d.path)}">
+      <span class="discover-name">${escapeHtml(basename(d.path))}</span>
+      <span class="discover-src">${escapeHtml(d.sources.join(' · '))}</span>
+      <button class="btn-row-icon" data-action="discover-add" title="${t('discoverAdd')}">＋</button>
+      <button class="btn-card-launch-mini" data-action="discover-launch" title="${t('discoverLaunch')}">▶</button>
+    </div>`).join('')}
+  <div class="discover-roots">
+    <div class="discover-roots-label">${escapeHtml(t('rootsLabel'))}</div>
+    ${getScanRoots().map((r) => `
+      <span class="root-chip" title="${escapeHtml(r)}">${escapeHtml(basename(r))}<button data-action="root-remove" data-root="${escapeHtml(r)}" title="${t('removeRootTitle')}">×</button></span>`).join('')}
+    <button class="btn-root-add" data-action="root-add">${escapeHtml(t('addRootBtn'))}</button>
+  </div>`;
+
+function renderDiscoveredSection() {
+  const items = getDiscovered();
+  const collapsed = isSectionCollapsed(DISCOVERED_SECTION);
+  const wrap = document.createElement('div');
+  wrap.className = 'folder-section folder-section-discovered';
+  const header = renderSectionHeader('discovered', t('sectionDiscovered'), items.length, collapsed,
+    `<button class="btn-row-icon fs-refresh" data-action="rescan" title="${t('discoverRefresh')}">⟳</button>`);
+  onActions(header, { rescan: rescanAndRender });
+  header.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-action]')) andRender(toggleSection)(DISCOVERED_SECTION);
+  });
+  wrap.appendChild(header);
+  if (collapsed) return wrap;
+
+  const body = document.createElement('div');
+  body.className = 'discover-body';
+  body.innerHTML = discoverBodyHtml(items);
+  const itemOf = (el) => items[Number(el.closest('.discover-row').getAttribute('data-index'))];
+  onActions(body, {
+    'root-add': async () => {
+      const picked = await window.api.openFolder();
+      if (picked && addScanRoot(picked)) await rescanAndRender();
+    },
+    'root-remove': (el) => {
+      removeScanRoot(el.getAttribute('data-root'));
+      rescanAndRender();
+    },
+    'discover-add': (el) => addDiscoveredProject(itemOf(el), false),
+    'discover-launch': (el) => addDiscoveredProject(itemOf(el), true),
+  });
+  wrap.appendChild(body);
+  return wrap;
+}
+
+export async function addDiscoveredProject(item, launch) {
+  if (!item) return;
+  const folder = addOrSelectFolderByPath(item.path, suggestCli(item));
+  renderFolderCards();
+  if (launch) await launchFolderSession(folder.id);
+  else selectActiveFolder(folder.id);
+}
+
+// --- Session tabs & status bar ---
+// Quota windows exactly as the CLI reported them (5h, Wk, Wk·Sonnet, Gem·Wk ...)
+const quotaItems = (folder) => ((folder && folder.usage && folder.usage.windows) || [])
+  .filter((w) => typeof w.pct === 'number')
+  .map((w) => ({ label: w.label, value: Math.max(0, Math.min(100, w.pct)), resetText: w.resetText || '', resetsAt: w.resetsAt || null }));
+
+const levelOf = (pct) => (pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : 'ok');
+
+const quotaLevel = (items) => (items.length ? levelOf(Math.max(...items.map((i) => i.value))) : '');
+
+// "2h13m" / "3d4h" until reset, or the CLI's own reset text
+const formatReset = (item, now = Date.now()) => {
+  if (!item.resetsAt) return item.resetText || '';
+  return item.resetsAt <= now ? t('resetDue') : formatDuration(item.resetsAt - now);
+};
 
 export function renderSessionTabs() {
-  const sessionTabsBar = document.getElementById('session-tabs-bar');
-  if (!sessionTabsBar) return;
-  sessionTabsBar.innerHTML = '';
-
-  const folders = getFolders();
+  const bar = document.getElementById('session-tabs-bar');
+  if (!bar) return;
   const activeFolderId = getActiveFolderId();
-  const activeSessions = folders.filter((f) => f.isActive);
-
-  activeSessions.forEach((folder) => {
-    const isSelected = folder.id === activeFolderId;
+  bar.replaceChildren(...getFolders().filter((f) => f.isActive).map((folder) => {
+    const name = displayName(folder);
     const tab = document.createElement('div');
-    tab.className = `session-tab ${isSelected ? 'active' : ''}`;
-
-    const displayName = getFolderDisplayName(folder);
-    tab.title = `${displayName} (${folder.cli})`;
-
-    if (!folder.usage) folder.usage = { tokens: 0, cost: 0.0, sessionQuota: null, weekQuota: null };
-
-    const quotaText = getQuotaDisplayText(folder);
-
+    tab.className = `session-tab ${folder.id === activeFolderId ? 'active' : ''}`;
+    tab.title = `${name} (${folder.cli})`;
     tab.innerHTML = `
       <div class="tab-status-dot active"></div>
-      <span class="tab-title-text">${displayName} (${folder.cli})</span>
-      <span class="tab-usage-badge" title="현재 세션 Quota 한도">${quotaText}</span>
-    `;
-
-    tab.addEventListener('click', () => {
-      selectActiveFolder(folder.id);
-    });
-
-    sessionTabsBar.appendChild(tab);
-  });
+      <span class="tab-title-text">${folder.runningMode === 'chat' ? '💬 ' : ''}${escapeHtml(name)} (${folder.cli})</span>
+      <span class="tab-quota-dot ${quotaLevel(quotaItems(folder))}" title="${escapeHtml(getQuotaDisplayText(folder))}"></span>`;
+    tab.addEventListener('click', () => selectActiveFolder(folder.id));
+    return tab;
+  }));
+  renderUsageStatusBar();
 }
 
-export function debouncedRenderSessionTabs() {
-  if (tabUsageUpdateTimer) clearTimeout(tabUsageUpdateTimer);
-  tabUsageUpdateTimer = setTimeout(() => {
-    renderSessionTabs();
-  }, 200);
+const quotaItemHtml = (i) => {
+  const lvl = levelOf(i.value);
+  const reset = formatReset(i);
+  const title = `${i.label} ${i.value}%${reset ? ` · ${t('resetsLabel')} ${reset}` : ''}`;
+  return `<span class="sb-item sb-quota ${lvl === 'ok' ? '' : lvl}" title="${escapeHtml(title)}"><span class="sb-muted">${escapeHtml(i.label)}</span><span class="sb-bar"><span style="width:${i.value}%"></span></span><span class="sb-pct">${i.value}%</span>${reset ? `<span class="sb-reset">↻ ${escapeHtml(reset)}</span>` : ''}</span>`;
+};
+
+const updatedText = (usage) => {
+  if (usage.isRefreshing) return t('refreshing');
+  if (!usage.updatedAt) return '';
+  const mins = Math.floor((Date.now() - usage.updatedAt) / 60000);
+  return mins < 1 ? t('justNow') : t('updatedAgo').replace('{n}', mins);
+};
+
+export function renderUsageStatusBar() {
+  const bar = document.getElementById('usage-status-bar');
+  if (!bar) return;
+  const folder = getFolder(getActiveFolderId());
+  const active = folder && folder.isActive ? folder : null;
+  const usage = (active && active.usage) || {};
+  const items = active ? quotaItems(active) : [];
+  // Left: session · CLI · last update + refresh · quota bars. Right: CPU / memory (always).
+  const left = active
+    ? `<span class="sb-item sb-name">${escapeHtml(displayName(active))}</span>
+       <span class="sb-item sb-cli">${escapeHtml(active.cli || '')}</span>
+       <span class="sb-item sb-refresh">
+         <span class="sb-muted">${updatedText(usage)}</span>
+         <button id="btn-refresh-usage" class="btn-refresh-usage ${usage.isRefreshing ? 'spinning' : ''}" title="${t('refreshUsage')}"><span>⟳</span></button>
+       </span>
+       ${items.length ? items.map(quotaItemHtml).join('') : `<span class="sb-item sb-muted">${t('notChecked')}</span>`}`
+    : `<span class="sb-item sb-muted">${t('noSession')}</span>`;
+  bar.innerHTML = `
+    <div class="sb-col sb-col-left">${left}</div>
+    <div class="sb-col sb-col-right">${systemStatusSlot()}</div>`;
 }
+
+export const debouncedRenderSessionTabs = debounce(renderSessionTabs, 200);

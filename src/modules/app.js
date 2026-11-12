@@ -5,197 +5,191 @@ import {
   setFolders,
   getFolders,
   getActiveFolderId,
-  setPendingCloseFolderId
+  setPendingCloseFolderId,
+  setGroups,
+  setScanRoots,
+  setMergeSamePath
 } from './state.js';
 import { saveAllConfig } from './config.js';
-import {
-  createTerminalInstance,
-  fitAndResizeTerminal,
-  debouncedFitAndResize,
-  triggerManualUsageCheck,
-  setupPtyListeners
-} from './terminal.js';
+import { createTerminalInstance, fitAndResizeTerminal, debouncedFitAndResize, setupPtyListeners } from './terminal.js';
+import { setupChatListeners } from './chat.js';
+import { triggerManualUsageCheck, startUsageScheduler } from './usage.js';
 import { exportConversationChatRaw, exportConversationReportPDF } from './extract.js';
+import * as M from './folder-model.js';
+import { addOrSelectFolderByPath, refreshMissingPaths, refreshDiscovered } from './folders.js';
+import { openSwitcher, setupSwitcherShortcut } from './switcher.js';
+import { setupTitlebar } from './titlebar.js';
+import { startSystemMonitor } from './sysmon.js';
+import { setupBrowserGuard } from './browser-guard.js';
 import {
   applyTheme,
   toggleTheme,
   updateUILanguage,
   renderFolderCards,
   renderSessionTabs,
+  renderUsageStatusBar,
   renderWelcomeManual,
   selectActiveFolder,
   closeFolderSessionConfirmed,
-  syncInputValuesToFolders
+  startNewGroupInput
 } from './ui.js';
 
-let resizerAnimationFrame = null;
+const SIDEBAR_MIN = 260;
+const SIDEBAR_SNAP = 135;
 
-function initSidebarResizer() {
-  const sidebar = document.getElementById('sidebar');
-  const sidebarResizer = document.getElementById('sidebar-resizer');
-  const btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
-  let isResizing = false;
+// Pure: saved config -> initial app data
+export function bootState(config) {
+  const saved = (config && Array.isArray(config.folders)) ? config.folders : [];
+  const mergeSamePath = !(config && config.mergeSamePath === false);
+  const loaded = saved.map(M.fromConfig);
+  // One card per path (unless turned off); folders unused for a long time go to the archive
+  const folders = saved.length
+    ? M.autoArchived(mergeSamePath ? M.mergeDuplicates(loaded) : loaded)
+    : [M.createFolder({ path: 'C:\\', id: 'folder_default', now: 0 })];
+  return {
+    folders,
+    groups: M.sanitizeGroups(config && config.groups),
+    scanRoots: M.sanitizeRoots(config && config.scanRoots),
+    mergeSamePath,
+    merged: saved.length !== folders.length && saved.length > 0,
+  };
+}
 
-  if (!sidebarResizer) return;
+// The visible terminal follows layout changes
+function refitActiveTerminal(fit = fitAndResizeTerminal) {
+  const activeId = getActiveFolderId();
+  if (activeId && getFolders().some((f) => f.isActive)) fit(activeId);
+}
 
-  sidebarResizer.addEventListener('mousedown', () => {
-    isResizing = true;
-    sidebarResizer.classList.add('resizing');
-    sidebar.classList.add('is-resizing');
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  });
+const setSidebarToggleIcon = (sidebar) => {
+  const btn = document.getElementById('btn-toggle-sidebar');
+  if (btn) btn.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+};
 
+function initSidebarResizer(sidebar) {
+  const resizer = document.getElementById('sidebar-resizer');
+  if (!resizer) return;
+  let resizing = false;
+  let frame = null;
+
+  const setDragging = (on) => {
+    resizing = on;
+    resizer.classList.toggle('resizing', on);
+    sidebar.classList.toggle('is-resizing', on);
+    document.body.style.cursor = on ? 'col-resize' : '';
+    document.body.style.userSelect = on ? 'none' : '';
+  };
+
+  resizer.addEventListener('mousedown', () => setDragging(true));
   document.addEventListener('mousemove', (e) => {
-    if (!isResizing) return;
-
-    if (resizerAnimationFrame) cancelAnimationFrame(resizerAnimationFrame);
-
-    resizerAnimationFrame = requestAnimationFrame(() => {
-      const maxAllowedWidth = window.innerWidth / 3;
-      const snapThreshold = 135;
-
-      let newWidth = e.clientX;
-
-      if (newWidth <= snapThreshold) {
-        sidebar.classList.add('collapsed');
-        sidebar.style.width = '';
-        if (btnToggleSidebar) btnToggleSidebar.textContent = '▶';
-      } else {
-        sidebar.classList.remove('collapsed');
-        const clampedWidth = Math.max(260, Math.min(newWidth, maxAllowedWidth));
-        sidebar.style.width = `${clampedWidth}px`;
-        if (btnToggleSidebar) btnToggleSidebar.textContent = '◀';
-      }
+    if (!resizing) return;
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      const collapse = e.clientX <= SIDEBAR_SNAP;
+      sidebar.classList.toggle('collapsed', collapse);
+      sidebar.style.width = collapse ? '' : `${Math.max(SIDEBAR_MIN, Math.min(e.clientX, window.innerWidth / 3))}px`;
+      setSidebarToggleIcon(sidebar);
     });
   });
-
   document.addEventListener('mouseup', () => {
-    if (isResizing) {
-      isResizing = false;
-      if (resizerAnimationFrame) cancelAnimationFrame(resizerAnimationFrame);
-
-      sidebarResizer.classList.remove('resizing');
-      sidebar.classList.remove('is-resizing');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-
-      const folders = getFolders();
-      const activeCount = folders.filter((f) => f.isActive).length;
-      const activeFolderId = getActiveFolderId();
-      if (activeCount > 0 && activeFolderId) {
-        fitAndResizeTerminal(activeFolderId);
-      }
-    }
+    if (!resizing) return;
+    if (frame) cancelAnimationFrame(frame);
+    setDragging(false);
+    refitActiveTerminal();
   });
 }
 
+function initSidebarToggle(sidebar) {
+  const btn = document.getElementById('btn-toggle-sidebar');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    sidebar.classList.toggle('collapsed');
+    sidebar.style.width = '';
+    setSidebarToggleIcon(sidebar);
+    setTimeout(() => refitActiveTerminal(), 50);
+  });
+}
+
+async function addFolderFromPicker() {
+  const selectedPath = await window.api.openFolder();
+  if (!selectedPath) return;
+  // Same path already registered -> just select it (one card per folder)
+  const folder = addOrSelectFolderByPath(selectedPath);
+  renderFolderCards();
+  selectActiveFolder(folder.id);
+  saveAllConfig();
+}
+
+async function saveConfigWithNotice() {
+  const res = await saveAllConfig();
+  alert(res && res.success
+    ? `${t('configSaveSuccess')}${res.path}`
+    : `${t('configSaveError')}${(res && res.error) || ''}`);
+}
+
+function closeConfirmModal() {
+  setPendingCloseFolderId(null);
+  const modal = document.getElementById('confirm-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+// id -> click handler of the static buttons in index.html
+const BUTTONS = {
+  'btn-theme-toggle': toggleTheme,
+  'btn-export-report': exportConversationReportPDF,
+  'btn-extract-chat': exportConversationChatRaw,
+  'btn-add-folder': addFolderFromPicker,
+  'btn-new-group': startNewGroupInput,
+  'btn-open-switcher': openSwitcher,
+  'btn-save': saveConfigWithNotice,
+  'modal-btn-cancel': closeConfirmModal,
+  'modal-btn-confirm': closeFolderSessionConfirmed,
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
+  setupBrowserGuard();
+  setupTitlebar();
   setupPtyListeners();
+  setupChatListeners();
+  startUsageScheduler();
 
   const config = await window.api.loadConfig();
-
-  if (config && config.lang) {
-    setLanguage(config.lang);
-  } else {
-    setLanguage('ko');
-  }
-
-  if (config && config.theme) {
-    applyTheme(config.theme);
-  } else {
-    applyTheme('dark');
-  }
-
+  setLanguage((config && config.lang) || 'ko');
+  applyTheme((config && config.theme) || 'dark');
   updateUILanguage();
 
-  let initialFolders = [];
-  if (config && config.folders && config.folders.length > 0) {
-    initialFolders = config.folders.map((f) => ({
-      id: f.id || 'folder_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-      path: f.path || 'C:\\',
-      alias: f.alias || '',
-      cli: f.cli || 'claude',
-      customCommand: f.customCommand || '',
-      isActive: false,
-      usage: { tokens: 0, cost: 0.0, sessionQuota: null, weekQuota: null },
-    }));
-  } else {
-    initialFolders = [
-      {
-        id: 'folder_default',
-        path: 'C:\\',
-        alias: '',
-        cli: 'claude',
-        customCommand: '',
-        isActive: false,
-        usage: { tokens: 0, cost: 0.0, sessionQuota: null, weekQuota: null },
-      },
-    ];
-  }
-
-  setFolders(initialFolders);
-
-  initialFolders.forEach((f) => {
-    createTerminalInstance(f.id);
-  });
-
-  renderFolderCards();
-  renderSessionTabs();
-  initSidebarResizer();
-
-  const activeSessions = initialFolders.filter((f) => f.isActive);
-  if (activeSessions.length === 0) {
-    renderWelcomeManual();
-  } else if (initialFolders.length > 0) {
-    selectActiveFolder(initialFolders[0].id);
-  }
+  const boot = bootState(config);
+  setGroups(boot.groups);
+  setScanRoots(boot.scanRoots);
+  setMergeSamePath(boot.mergeSamePath);
+  setFolders(boot.folders);
+  boot.folders.forEach((f) => createTerminalInstance(f.id));
 
   const sidebar = document.getElementById('sidebar');
+  renderFolderCards();
+  renderSessionTabs();
+  initSidebarResizer(sidebar);
+  initSidebarToggle(sidebar);
+  renderWelcomeManual(); // nothing runs right after start
+
+  // Background checks: missing folders, projects found in the CLIs' history
+  refreshMissingPaths().then((changed) => { if (changed) renderFolderCards(); }).catch(() => {});
+  refreshDiscovered(true).then(() => renderFolderCards()).catch(() => {});
+  if (boot.merged) saveAllConfig(); // duplicates were merged
+
   const terminalsWrapper = document.getElementById('terminals-wrapper');
   if (window.ResizeObserver && terminalsWrapper) {
-    const mainObserver = new ResizeObserver(() => {
-      if (sidebar && !sidebar.classList.contains('is-resizing')) {
-        const folders = getFolders();
-        const activeCount = folders.filter((f) => f.isActive).length;
-        const activeFolderId = getActiveFolderId();
-        if (activeCount > 0 && activeFolderId) {
-          debouncedFitAndResize(activeFolderId);
-        }
-      }
-    });
-    mainObserver.observe(terminalsWrapper);
+    new ResizeObserver(() => {
+      if (!sidebar.classList.contains('is-resizing')) refitActiveTerminal(debouncedFitAndResize);
+    }).observe(terminalsWrapper);
   }
 
-  // Sidebar Toggle Button
-  const btnToggleSidebar = document.getElementById('btn-toggle-sidebar');
-  if (btnToggleSidebar) {
-    btnToggleSidebar.addEventListener('click', () => {
-      sidebar.classList.toggle('collapsed');
-      sidebar.style.width = '';
-      const isCollapsed = sidebar.classList.contains('collapsed');
-      btnToggleSidebar.textContent = isCollapsed ? '▶' : '◀';
+  setupSwitcherShortcut();
+  Object.entries(BUTTONS).forEach(([id, handler]) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('click', () => handler());
+  });
 
-      setTimeout(() => {
-        const folders = getFolders();
-        const activeCount = folders.filter((f) => f.isActive).length;
-        const activeFolderId = getActiveFolderId();
-        if (activeCount > 0 && activeFolderId) {
-          fitAndResizeTerminal(activeFolderId);
-        }
-      }, 50);
-    });
-  }
-
-  // Theme Toggle Button
-  const btnThemeToggle = document.getElementById('btn-theme-toggle');
-  if (btnThemeToggle) {
-    btnThemeToggle.addEventListener('click', () => {
-      toggleTheme();
-    });
-  }
-
-  // Language Select
   const selectLang = document.getElementById('select-lang');
   if (selectLang) {
     selectLang.value = getCurrentLang();
@@ -206,96 +200,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Check Usage Button
-  const btnCheckUsage = document.getElementById('btn-check-usage');
-  if (btnCheckUsage) {
-    btnCheckUsage.addEventListener('click', () => {
-      triggerManualUsageCheck();
+  // Refresh usage button (the status bar is re-rendered, so delegate)
+  const usageStatusBar = document.getElementById('usage-status-bar');
+  if (usageStatusBar) {
+    usageStatusBar.addEventListener('click', (e) => {
+      if (e.target.closest('#btn-refresh-usage')) triggerManualUsageCheck();
     });
   }
+  renderUsageStatusBar();
+  setInterval(renderUsageStatusBar, 30000);
+  startSystemMonitor();
 
-  // Export PDF Report Button
-  const btnExportReport = document.getElementById('btn-export-report');
-  if (btnExportReport) {
-    btnExportReport.addEventListener('click', () => {
-      exportConversationReportPDF();
-    });
-  }
-
-  // Extract Raw Chat Button
-  const btnExtractChat = document.getElementById('btn-extract-chat');
-  if (btnExtractChat) {
-    btnExtractChat.addEventListener('click', () => {
-      exportConversationChatRaw();
-    });
-  }
-
-  // Add Folder Button
-  const btnAddFolder = document.getElementById('btn-add-folder');
-  if (btnAddFolder) {
-    btnAddFolder.addEventListener('click', async () => {
-      syncInputValuesToFolders();
-      const selectedPath = await window.api.openFolder();
-      if (selectedPath) {
-        const folders = getFolders();
-        const newId = 'folder_' + Date.now();
-        const newFolder = {
-          id: newId,
-          path: selectedPath,
-          alias: '',
-          cli: 'claude',
-          customCommand: '',
-          isExpanded: false,
-          isActive: false,
-          usage: { tokens: 0, cost: 0.0, sessionQuota: null, weekQuota: null },
-        };
-        folders.push(newFolder);
-        setFolders(folders);
-        createTerminalInstance(newId);
-        renderFolderCards();
-        saveAllConfig();
-      }
-    });
-  }
-
-  // Save Settings Button
-  const btnSave = document.getElementById('btn-save');
-  if (btnSave) {
-    btnSave.addEventListener('click', async () => {
-      const res = await saveAllConfig();
-      if (res && res.success) {
-        alert(`${t('configSaveSuccess')}${res.path}`);
-      } else {
-        alert(`${t('configSaveError')}${res && res.error ? res.error : ''}`);
-      }
-    });
-  }
-
-  // Modal Buttons
-  const confirmModal = document.getElementById('confirm-modal');
-  const modalBtnConfirm = document.getElementById('modal-btn-confirm');
-  const modalBtnCancel = document.getElementById('modal-btn-cancel');
-
-  if (modalBtnCancel) {
-    modalBtnCancel.addEventListener('click', () => {
-      setPendingCloseFolderId(null);
-      if (confirmModal) confirmModal.classList.add('hidden');
-    });
-  }
-
-  if (modalBtnConfirm) {
-    modalBtnConfirm.addEventListener('click', () => {
-      closeFolderSessionConfirmed();
-    });
-  }
-
-  // Save Config on App Exit
-  if (window.api && window.api.onSaveBeforeQuit) {
+  // Save config on app exit
+  if (window.api.onSaveBeforeQuit) {
     window.api.onSaveBeforeQuit(async () => {
       await saveAllConfig();
-      if (window.api.confirmQuit) {
-        window.api.confirmQuit();
-      }
+      if (window.api.confirmQuit) window.api.confirmQuit();
     });
   }
 });

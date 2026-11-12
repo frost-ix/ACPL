@@ -1,0 +1,17 @@
+# Line endings are fixed by the repository, not by each machine's core.autocrlf:
+# text files are stored and checked out with LF (Rust, JS, CSS, JSON, HTML, Markdown ...).
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binaries: never touched
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.gif binary
+*.woff binary
+*.woff2 binary

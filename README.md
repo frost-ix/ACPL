@@ -53,8 +53,8 @@ npm run tauri:build
 빌드가 완료되면 다음 위치에 바이너리가 생성됩니다:
 
 - **단일 실행 파일**: `src-tauri/target/release/acpl.exe` (~9MB)
-- **설치 프로그램 (.exe)**: `src-tauri/target/release/bundle/nsis/ACPL_1.0.2_x64-setup.exe` (~2MB)
-- **MSI 패키지**: `src-tauri/target/release/bundle/msi/ACPL_1.0.2_x64_en-US.msi`
+- **설치 프로그램 (.exe)**: `src-tauri/target/release/bundle/nsis/ACPL_<버전>_x64-setup.exe` (~2MB)
+- **MSI 패키지**: `src-tauri/target/release/bundle/msi/ACPL_<버전>_x64_en-US.msi`
 
 ---
 
@@ -63,3 +63,7 @@ npm run tauri:build
 - **제작**: frost-ix (성현우)
 - **GitHub**: https://github.com/frost-ix
 - **문의/개선 의견**: 이슈 또는 프로젝트 리포지토리를 통해 전달해 주세요.
+
+## 📄 라이선스
+
+MIT License — [LICENSE](LICENSE) 참고

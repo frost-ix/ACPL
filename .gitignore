@@ -6,6 +6,15 @@
 /src-tauri/target
 /src-tauri/gen
 
+# Tests & dev-only tools (kept local, not released)
+/tests/
+/src-tauri/src/unit_tests.rs
+/scripts/check-syntax.cjs
+/scripts/check-refs.cjs
+/scripts/capture-usage.cjs
+/scripts/redact-fixtures.cjs
+/scripts/redact-rules.cjs
+
 # Config & Temporary files
 directory.json
 *.tmp

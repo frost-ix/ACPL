@@ -1,32 +1,21 @@
 // Configuration Persistence Module
+//
+// The saved config is a pure projection of the store (see folder-model.js toConfig).
 
-import { getFolders, getCurrentTheme } from './state.js';
+import { getFolders, getCurrentTheme, getGroups, getScanRoots, isMergeSamePath } from './state.js';
 import { getCurrentLang } from './i18n.js';
-import { syncInputValuesToFolders } from './ui.js';
+import { toConfig } from './folder-model.js';
+import { debounce } from './util.js';
 
-let saveDebounceTimer = null;
+export const buildConfig = () => ({
+  theme: getCurrentTheme(),
+  lang: getCurrentLang(),
+  scanRoots: getScanRoots(),
+  mergeSamePath: isMergeSamePath(),
+  groups: getGroups(),
+  folders: getFolders().map(toConfig),
+});
 
-export async function saveAllConfig() {
-  syncInputValuesToFolders(); // Sync DOM data before saving
-  const folders = getFolders();
-  const configToSave = {
-    theme: getCurrentTheme(),
-    lang: getCurrentLang(),
-    folders: folders.map((f) => ({
-      id: f.id,
-      path: f.path,
-      alias: f.alias || '',
-      cli: f.cli,
-      customCommand: f.customCommand || '',
-    })),
-  };
-  const res = await window.api.saveConfig(configToSave);
-  return res;
-}
+export const saveAllConfig = () => window.api.saveConfig(buildConfig());
 
-export function debouncedSaveConfig() {
-  if (saveDebounceTimer) clearTimeout(saveDebounceTimer);
-  saveDebounceTimer = setTimeout(() => {
-    saveAllConfig();
-  }, 300);
-}
+export const debouncedSaveConfig = debounce(saveAllConfig, 300);

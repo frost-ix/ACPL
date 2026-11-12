@@ -12,6 +12,28 @@
   <link rel="stylesheet" href="vendor/xterm.css">
 </head>
 <body class="theme-dark">
+  <!-- Custom title bar (window decorations are off). Every non-button part is a drag region;
+       double click toggles maximize. Buttons: Ubuntu-style round controls on the right. -->
+  <header class="titlebar" id="titlebar" data-tauri-drag-region>
+    <div class="titlebar-side" data-tauri-drag-region></div>
+    <div class="titlebar-title" data-tauri-drag-region>
+      <img class="titlebar-icon" src="vendor/acl_icon.png" alt="" data-tauri-drag-region>
+      <span id="titlebar-text" data-tauri-drag-region>ACPL</span>
+    </div>
+    <div class="titlebar-side titlebar-controls" data-tauri-drag-region>
+      <button class="wc-btn" id="wc-minimize" title="최소화" tabindex="-1">
+        <svg viewBox="0 0 10 10"><path d="M2 5.5h6"/></svg>
+      </button>
+      <button class="wc-btn" id="wc-maximize" title="최대화" tabindex="-1">
+        <svg class="wc-icon-max" viewBox="0 0 10 10"><rect x="2" y="2" width="6" height="6" rx="0.6"/></svg>
+        <svg class="wc-icon-restore" viewBox="0 0 10 10"><rect x="1.8" y="3.4" width="4.8" height="4.8" rx="0.5"/><path d="M3.6 3.4V2.2h4.2v4.2H6.6"/></svg>
+      </button>
+      <button class="wc-btn wc-close" id="wc-close" title="닫기" tabindex="-1">
+        <svg viewBox="0 0 10 10"><path d="M2.6 2.6l4.8 4.8M7.4 2.6l-4.8 4.8"/></svg>
+      </button>
+    </div>
+  </header>
+
   <div class="app-container">
     <!-- Sidebar Controls & Dynamic Folder List -->
     <aside class="sidebar" id="sidebar">
@@ -28,18 +50,23 @@
         <span class="sidebar-text">작업 폴더 추가</span>
       </button>
 
+      <button id="btn-new-group" class="btn-open-switcher btn-new-group" title="새 그룹 만들기">
+        <span>🗂</span>
+        <span class="sidebar-text"><span class="new-group-btn-label">새 그룹</span></span>
+      </button>
+
+      <button id="btn-open-switcher" class="btn-open-switcher" title="폴더 빠른 전환 (Ctrl+K)">
+        <span>🔍</span>
+        <span class="sidebar-text"><span class="switcher-btn-label">폴더 찾기</span><kbd>Ctrl+K</kbd></span>
+      </button>
+
       <!-- Dynamic Folder List -->
       <div class="folder-list-container" id="folder-list-container">
-        <!-- Folder cards dynamically populated by renderer.js -->
+        <!-- Folder sections / cards rendered by modules/ui.js -->
       </div>
 
       <!-- Sidebar Footer -->
       <div class="sidebar-footer">
-        <!-- 1. Usage Query Button -->
-        <button id="btn-check-usage" class="btn-check-usage" title="현재 계정 사용량(Quota) 확인하기">
-          <span>📊</span>
-          <span class="sidebar-text">현재 사용량 확인하기</span>
-        </button>
 
         <!-- 2. Theme & Language Toggle Group -->
         <div class="theme-toggle-group">
@@ -82,6 +109,9 @@
       <div class="terminals-wrapper" id="terminals-wrapper">
         <!-- Xterm containers dynamically created per folder session -->
       </div>
+
+      <!-- VS Code style usage status bar -->
+      <footer id="usage-status-bar" class="status-bar"></footer>
     </main>
   </div>
 

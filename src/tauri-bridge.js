@@ -1,201 +1,138 @@
 (function () {
   console.log('[ACPL Bridge] Initializing Tauri v2 API Bridge...');
 
-  const getTauriCore = () => {
-    return window.__TAURI__ && window.__TAURI__.core;
+  const getTauriCore = () => window.__TAURI__ && window.__TAURI__.core;
+  const getTauriEvent = () => window.__TAURI__ && window.__TAURI__.event;
+  const logError = (name) => (e) => console.error(`[ACPL Bridge] ${name} failed:`, e);
+
+  const NO_CORE = Object.freeze({ success: false, error: 'Tauri core not available' });
+  const FAILED = Object.freeze({ success: false });
+  const DEFAULT_CONFIG = Object.freeze({
+    theme: 'dark',
+    lang: 'ko',
+    folders: [{ id: 'folder_default', path: 'C:\\', alias: '', cli: 'claude', customCommand: '' }],
+  });
+
+  // Backend command with a fallback value when Tauri is missing or the command throws.
+  // `fallback` may be a function of the error.
+  const invoke = async (name, cmd, args, fallback) => {
+    const core = getTauriCore();
+    if (!core) return typeof fallback === 'function' ? fallback(null) : fallback;
+    try {
+      return await core.invoke(cmd, args);
+    } catch (e) {
+      logError(name)(e);
+      return typeof fallback === 'function' ? fallback(e) : fallback;
+    }
   };
 
-  const getTauriEvent = () => {
-    return window.__TAURI__ && window.__TAURI__.event;
+  // `{ payload }` commands (most of them)
+  const withPayload = (name, cmd, fallback) => (payload) => invoke(name, cmd, { payload }, fallback);
+
+  // Fire-and-forget command
+  const fire = (name, cmd, args) => {
+    const core = getTauriCore();
+    if (core) core.invoke(cmd, args).catch(logError(name));
   };
+
+  // Subscribe to a Tauri event, retrying until the event API is injected.
+  const listenEvent = (name, callback) => {
+    let unlisten = null;
+    let isSubscribed = true;
+    const setupListener = (retryCount = 0) => {
+      if (!isSubscribed) return;
+      const evt = getTauriEvent();
+      if (evt) {
+        evt.listen(name, (event) => { if (isSubscribed) callback(event.payload); }).then((fn) => { unlisten = fn; });
+      } else if (retryCount < 50) {
+        setTimeout(() => setupListener(retryCount + 1), 100);
+      }
+    };
+    setupListener();
+    return () => {
+      isSubscribed = false;
+      if (unlisten) unlisten();
+    };
+  };
+
+  // Keystrokes are coalesced per session (one invoke per microtask) and sent in order.
+  const writeStates = new Map(); // sessionId -> { buffer, scheduled, chain }
+  const writePty = (payload) => {
+    const sessionId = payload && payload.sessionId;
+    if (!sessionId || typeof payload.data !== 'string') return;
+    const st = writeStates.get(sessionId) || { buffer: '', scheduled: false, chain: Promise.resolve() };
+    writeStates.set(sessionId, st);
+    st.buffer += payload.data;
+    if (st.scheduled) return;
+    st.scheduled = true;
+    queueMicrotask(() => {
+      st.scheduled = false;
+      const data = st.buffer;
+      st.buffer = '';
+      if (!data) return;
+      st.chain = st.chain
+        .then(() => {
+          const core = getTauriCore();
+          return core && core.invoke('pty_write', { payload: { sessionId, data } });
+        })
+        .catch(logError('writePty'));
+    });
+  };
+
+  const DIALOG_OPTIONS = { directory: true, multiple: false };
+  const openFolder = async () => {
+    try {
+      const plugin = window.__TAURI_PLUGIN_DIALOG__ || (window.__TAURI__ && window.__TAURI__.dialog);
+      if (plugin && plugin.open) return await plugin.open(DIALOG_OPTIONS);
+    } catch (e) {
+      logError('openFolder')(e);
+      return null;
+    }
+    return invoke('openFolder', 'plugin:dialog|open', { options: DIALOG_OPTIONS }, null);
+  };
+
+  const listener = (event) => (callback) => listenEvent(event, (p) => callback(p));
 
   window.api = {
-    // Config API
-    loadConfig: async () => {
-      try {
-        const core = getTauriCore();
-        if (core) {
-          const res = await core.invoke('config_load');
-          if (res) return res;
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] loadConfig failed:', e);
-      }
-      return {
-        theme: 'dark',
-        lang: 'ko',
-        folders: [
-          { id: 'folder_default', path: 'C:\\', alias: '', cli: 'claude', customCommand: '' }
-        ]
-      };
-    },
+    // Config
+    loadConfig: async () => (await invoke('loadConfig', 'config_load', undefined, null)) || DEFAULT_CONFIG,
+    saveConfig: (config) => invoke('saveConfig', 'config_save', { configData: config }, NO_CORE),
+    saveExportFile: withPayload('saveExportFile', 'save_export_file', NO_CORE),
 
-    saveConfig: async (config) => {
-      try {
-        const core = getTauriCore();
-        if (core) {
-          return await core.invoke('config_save', { configData: config });
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] saveConfig failed:', e);
-      }
-      return { success: false, error: 'Tauri core not available' };
-    },
+    // Dialog
+    openFolder,
 
-    // File Save Export API
-    saveExportFile: async (payload) => {
-      try {
-        const core = getTauriCore();
-        if (core) {
-          return await core.invoke('save_export_file', { payload });
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] saveExportFile failed:', e);
-      }
-      return { success: false, error: 'Tauri core not available' };
-    },
+    // PTY
+    spawnPty: withPayload('spawnPty', 'pty_spawn', NO_CORE),
+    killPty: withPayload('killPty', 'pty_kill', FAILED),
+    writePty,
+    resizePty: (payload) => fire('resizePty', 'pty_resize', { payload }),
 
-    // Dialog API
-    openFolder: async () => {
-      try {
-        if (window.__TAURI_PLUGIN_DIALOG__ && window.__TAURI_PLUGIN_DIALOG__.open) {
-          return await window.__TAURI_PLUGIN_DIALOG__.open({ directory: true, multiple: false });
-        } else if (window.__TAURI__ && window.__TAURI__.dialog && window.__TAURI__.dialog.open) {
-          return await window.__TAURI__.dialog.open({ directory: true, multiple: false });
-        } else {
-          const core = getTauriCore();
-          if (core) {
-            return await core.invoke('plugin:dialog|open', {
-              options: { directory: true, multiple: false }
-            });
-          }
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] openFolder failed:', e);
-      }
-      return null;
-    },
+    // Chat (non-interactive CLI)
+    chatSend: withPayload('chatSend', 'chat_send', (e) => (e ? { success: false, error: String(e) } : NO_CORE)),
+    chatCancel: withPayload('chatCancel', 'chat_cancel', FAILED),
 
-    // Multi PTY API
-    spawnPty: async (options) => {
-      try {
-        const core = getTauriCore();
-        if (core) {
-          return await core.invoke('pty_spawn', { payload: options });
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] spawnPty failed:', e);
-      }
-      return { success: false, error: 'Tauri core not available' };
-    },
+    // Conversation persistence: { cli, id } -> { exists } / { cli, cwd, sinceMs } -> { id }
+    sessionLookup: withPayload('sessionLookup', 'session_lookup', Object.freeze({})),
+    // Projects found in CLI transcripts / root folders: { roots, maxAgeDays } -> [{ path, sources, lastUsedMs }]
+    discoverProjects: withPayload('discoverProjects', 'discover_projects', Object.freeze([])),
+    // CLI history file of a conversation: { cli, id, cwd } -> { found, partial, path, messages }
+    readTranscript: withPayload('readTranscript', 'read_transcript', Object.freeze({ found: false, messages: [] })),
+    // [path] -> [bool] (folder still exists)
+    pathsExist: (paths) => invoke('pathsExist', 'paths_exist', { paths }, null),
+    // Status bar monitor: { cpu: % | null, memUsed, memTotal, appMem } (bytes)
+    systemUsage: () => invoke('systemUsage', 'system_usage', undefined, null),
+    // Slash commands for the chat palette: [{ name, description, source, content? }]
+    listCliCommands: withPayload('listCliCommands', 'list_cli_commands', Object.freeze([])),
 
-    killPty: async (options) => {
-      try {
-        const core = getTauriCore();
-        if (core) {
-          return await core.invoke('pty_kill', { payload: options });
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] killPty failed:', e);
-      }
-      return { success: false };
-    },
+    // Event subscriptions
+    onPtyData: listener('pty:data'),
+    onPtyExit: listener('pty:exit'),
+    onChatEvent: listener('chat:event'),
+    onChatStderr: listener('chat:stderr'),
+    onChatExit: listener('chat:exit'),
+    onSaveBeforeQuit: (callback) => listenEvent('save-before-quit', () => callback()),
 
-    writePty: (payload) => {
-      try {
-        const core = getTauriCore();
-        if (core) {
-          core.invoke('pty_write', { payload });
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] writePty failed:', e);
-      }
-    },
-
-    resizePty: (payload) => {
-      try {
-        const core = getTauriCore();
-        if (core) {
-          core.invoke('pty_resize', { payload });
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] resizePty failed:', e);
-      }
-    },
-
-    // Event Subscriptions
-    onPtyData: (callback) => {
-      let unlisten = null;
-      let isSubscribed = true;
-      const setupListener = (retryCount = 0) => {
-        if (!isSubscribed) return;
-        const evt = getTauriEvent();
-        if (evt) {
-          evt.listen('pty:data', (event) => {
-            if (isSubscribed) callback(event.payload);
-          }).then((fn) => { unlisten = fn; });
-        } else if (retryCount < 50) {
-          setTimeout(() => setupListener(retryCount + 1), 100);
-        }
-      };
-      setupListener();
-      return () => {
-        isSubscribed = false;
-        if (unlisten) unlisten();
-      };
-    },
-
-    onPtyExit: (callback) => {
-      let unlisten = null;
-      let isSubscribed = true;
-      const setupListener = (retryCount = 0) => {
-        if (!isSubscribed) return;
-        const evt = getTauriEvent();
-        if (evt) {
-          evt.listen('pty:exit', (event) => {
-            if (isSubscribed) callback(event.payload);
-          }).then((fn) => { unlisten = fn; });
-        } else if (retryCount < 50) {
-          setTimeout(() => setupListener(retryCount + 1), 100);
-        }
-      };
-      setupListener();
-      return () => {
-        isSubscribed = false;
-        if (unlisten) unlisten();
-      };
-    },
-
-    onSaveBeforeQuit: (callback) => {
-      let unlisten = null;
-      let isSubscribed = true;
-      const setupListener = (retryCount = 0) => {
-        if (!isSubscribed) return;
-        const evt = getTauriEvent();
-        if (evt) {
-          evt.listen('save-before-quit', () => {
-            if (isSubscribed) callback();
-          }).then((fn) => { unlisten = fn; });
-        } else if (retryCount < 50) {
-          setTimeout(() => setupListener(retryCount + 1), 100);
-        }
-      };
-      setupListener();
-      return () => {
-        isSubscribed = false;
-        if (unlisten) unlisten();
-      };
-    },
-
-    confirmQuit: () => {
-      try {
-        const core = getTauriCore();
-        if (core) {
-          core.invoke('confirm_quit');
-        }
-      } catch (e) {
-        console.error('[ACPL Bridge] confirmQuit failed:', e);
-      }
-    },
+    confirmQuit: () => fire('confirmQuit', 'confirm_quit'),
   };
 })();
