@@ -1,9 +1,10 @@
 // Terminal Instance & PTY Management Module
 
 import { getFolder, getFolders, updateFolder, termInstances, getCurrentTheme } from './state.js';
-import { renderFolderCards, renderSessionTabs, renderWelcomeManual, renderUsageStatusBar } from './ui.js';
+import { renderFolderCards, renderSessionIndicators, renderWelcomeManual, renderUsageStatusBar } from './ui.js';
 import { isProbeSession, handleProbeData, handleProbeExit, addFolderUsage } from './usage.js';
 import { flushSessionWatch } from './session.js';
+import { removeSession } from './panes.js';
 import { debounce } from './util.js';
 
 // xterm palettes per app theme (the terminal follows the theme like the rest of the window)
@@ -73,19 +74,6 @@ export function estimateTokensFromText(text) {
   return Math.ceil(wide * 1.5 + (clean.length - wide) * 0.25);
 }
 
-// Format Quota Limit Display for Tabs
-export function getQuotaDisplayText(folder) {
-  if (!folder || !folder.usage) return 'Quota: 0%';
-
-  const { windows, tokens } = folder.usage;
-  const known = (windows || []).filter((w) => typeof w.pct === 'number');
-  if (known.length) {
-    return known.map((w) => `${w.label}: ${w.pct}%`).join(' | ');
-  }
-
-  const estimatedPercent = Math.min(100, Math.ceil(((tokens || 0) / 200000) * 100));
-  return `Quota: ${estimatedPercent}%`;
-}
 
 // Dynamic Terminal Resize Function
 export function fitAndResizeTerminal(folderId) {
@@ -190,11 +178,12 @@ export function setupPtyListeners() {
     // A chat-mode session does not own a PTY; ignore exits of a previously killed terminal
     if (folder && folder.runningMode === 'chat') return;
     if (folder) updateFolder(sessionId, { isActive: false });
+    removeSession(sessionId);
     flushSessionWatch(sessionId);
     const inst = termInstances[sessionId];
     if (inst) inst.isSpawned = false;
     renderFolderCards();
-    renderSessionTabs();
+    renderSessionIndicators();
     renderUsageStatusBar();
     if (!getFolders().some((f) => f.isActive)) renderWelcomeManual();
   });

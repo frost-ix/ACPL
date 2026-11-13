@@ -10,7 +10,7 @@
 
 import { t } from './i18n.js';
 import { getFolders, getFolder, getActiveFolderId, updateFolder, updateFoldersWhere } from './state.js';
-import { renderUsageStatusBar, debouncedRenderSessionTabs } from './ui.js';
+import { renderUsageStatusBar, debouncedRenderSessionIndicators } from './ui.js';
 import { markUsageProbe } from './session.js';
 import { usageOf } from './folder-model.js';
 import { uniq } from './util.js';
@@ -88,7 +88,7 @@ export function addFolderUsage(folderId, tokens, cost = 0) {
     const u = usageOf(f);
     return { usage: { ...u, tokens: u.tokens + tokens, cost: u.cost + cost } };
   });
-  debouncedRenderSessionTabs();
+  debouncedRenderSessionIndicators();
 }
 
 // Apply quota values to every folder that uses this CLI (quota is account-wide).
@@ -100,7 +100,7 @@ export function applyUsageForCli(cli, parsed) {
   usageByCli = Object.freeze({ ...usageByCli, [cli]: { windows, updatedAt } });
   patchUsage((f) => f.cli === cli, () => ({ windows, updatedAt }));
   renderUsageStatusBar();
-  debouncedRenderSessionTabs();
+  debouncedRenderSessionIndicators();
 }
 
 // Copy the last known quota of this CLI into a (newly launched) folder.

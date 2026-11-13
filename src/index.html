@@ -15,7 +15,11 @@
   <!-- Custom title bar (window decorations are off). Every non-button part is a drag region;
        double click toggles maximize. Buttons: Ubuntu-style round controls on the right. -->
   <header class="titlebar" id="titlebar" data-tauri-drag-region>
-    <div class="titlebar-side" data-tauri-drag-region></div>
+    <!-- Left: actions on the current session (enabled while one is running) -->
+    <div class="titlebar-side titlebar-actions" data-tauri-drag-region>
+      <button class="tb-action tb-extract" id="btn-extract-chat" tabindex="-1" disabled>📝 대화 추출</button>
+      <button class="tb-action tb-report" id="btn-export-report" tabindex="-1" disabled>📄 보고서 출력</button>
+    </div>
     <div class="titlebar-title" data-tauri-drag-region>
       <img class="titlebar-icon" src="vendor/acl_icon.png" alt="" data-tauri-drag-region>
       <span id="titlebar-text" data-tauri-drag-region>ACPL</span>
@@ -93,19 +97,9 @@
 
     <!-- PowerShell Terminal Area -->
     <main class="terminal-area">
-      <!-- Session Tabs Header -->
-      <header class="terminal-header">
-        <div class="session-tabs-bar" id="session-tabs-bar">
-          <!-- Session Tabs rendered dynamically -->
-        </div>
+      <!-- Session panes (panes.js): each pane header shows the session and its
+           extract / report / browser buttons; running sessions are listed in the sidebar -->
 
-        <div class="terminal-controls">
-          <button id="btn-extract-chat" class="btn-sm btn-extract" title="현재 세션의 전체 대화내용을 텍스트 파일로 순수 추출">📝 대화 추출</button>
-          <button id="btn-export-report" class="btn-sm btn-report" title="현재 대화내용을 PDF 보고서로 추출">📄 보고서 출력</button>
-        </div>
-      </header>
-
-      <!-- Active Xterm Terminal Containers Container -->
       <div class="terminals-wrapper" id="terminals-wrapper">
         <!-- Xterm containers dynamically created per folder session -->
       </div>

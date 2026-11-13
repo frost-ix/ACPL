@@ -44,6 +44,12 @@ pub struct ChatSendPayload {
     /// `/btw` side question: one-off run on a fork of the conversation, no tools, not saved
     #[serde(default)]
     pub side: bool,
+    /// Browser panel of this session (0 / 1): the CLI gets the Playwright MCP for it
+    #[serde(rename = "browserSlot", default)]
+    pub browser_slot: Option<u8>,
+    /// Image attachments (files in the app's attachments folder, see save_attachment)
+    #[serde(default)]
+    pub images: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1628,6 +1634,384 @@ async fn list_cli_commands(payload: CommandListPayload) -> Vec<CliCommand> {
 }
 
 // ---------------------------------------------------------------------------
+// Browser panels: a child WebView2 next to a session, which that session's AI drives through
+// the Playwright MCP (CDP). Each slot is its own WebView2 environment (own profile folder,
+// own browser process), so the remote-debugging port never exposes the app's own UI.
+// Needs Tauri's `unstable` feature (multiple webviews in one window).
+// ---------------------------------------------------------------------------
+
+const BROWSER_SLOTS: u8 = 2;
+const BROWSER_PORT_BASE: u16 = 9333;
+const BROWSER_MCP_NAME: &str = "acpl_browser";
+const BROWSER_PROMPT: &str = "A browser panel is shown next to this session inside the app (ACPL). \
+Use the acpl_browser tools (Playwright) to open and operate web pages in it; the user watches it live. \
+Prefer them over any other browser tool.";
+
+fn browser_port(slot: u8) -> Option<u16> {
+    (slot < BROWSER_SLOTS).then(|| BROWSER_PORT_BASE + slot as u16)
+}
+
+fn browser_label(slot: u8) -> String {
+    format!("browser-{}", slot)
+}
+
+/// npx needs `cmd /c` when an MCP client spawns it on Windows
+fn browser_mcp_command(port: u16) -> Vec<String> {
+    ["/c", "npx", "-y", "@playwright/mcp@latest", "--cdp-endpoint"]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(format!("http://127.0.0.1:{}", port)))
+        .collect()
+}
+
+/// Extra CLI arguments that hand the browser panel of `slot` to the session's AI.
+/// The result is inserted into a PowerShell command line; every part is fixed or a number.
+fn browser_cli_args(cli: &str, slot: u8) -> Result<String, String> {
+    let port = browser_port(slot).ok_or("Invalid browser slot")?;
+    let args = browser_mcp_command(port);
+    match cli {
+        "claude" => {
+            let path = std::env::temp_dir().join(format!("acpl_browser_mcp_{}.json", port));
+            let config = json!({ "mcpServers": { BROWSER_MCP_NAME: { "command": "cmd", "args": args } } });
+            fs::write(&path, config.to_string()).map_err(|e| format!("Failed to write MCP config: {}", e))?;
+            Ok(format!(
+                " --mcp-config {} --allowedTools mcp__{} --append-system-prompt {}",
+                ps_single_quote(&path.to_string_lossy()),
+                BROWSER_MCP_NAME,
+                ps_single_quote(BROWSER_PROMPT)
+            ))
+        }
+        // TOML literal strings ('x') inside a PowerShell single-quoted argument ('' = ')
+        "codex" => {
+            let list = args.iter().map(|a| format!("''{}''", a)).collect::<Vec<_>>().join(",");
+            Ok(format!(
+                " -c 'mcp_servers.{name}.command=''cmd''' -c 'mcp_servers.{name}.args=[{list}]'",
+                name = BROWSER_MCP_NAME,
+                list = list
+            ))
+        }
+        _ => Err("The browser panel is only available for claude and codex".into()),
+    }
+}
+
+/// Only web pages (and the blank start page) are opened in a panel
+fn browser_url(raw: &str) -> Result<tauri::Url, String> {
+    let url: tauri::Url = raw.trim().parse().map_err(|_| format!("Invalid URL: {}", raw))?;
+    match url.scheme() {
+        "http" | "https" | "about" => Ok(url),
+        other => Err(format!("Unsupported URL scheme: {}", other)),
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Copy)]
+pub struct BrowserRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct BrowserOpenPayload {
+    pub slot: u8,
+    pub url: Option<String>,
+    pub rect: BrowserRect,
+}
+
+fn browser_webview(app: &AppHandle, slot: u8) -> Result<tauri::Webview, String> {
+    browser_port(slot).ok_or("Invalid browser slot")?;
+    app.get_webview(&browser_label(slot)).ok_or_else(|| "Browser panel is not open".to_string())
+}
+
+fn place_webview(webview: &tauri::Webview, rect: BrowserRect) -> Result<(), String> {
+    webview
+        .set_position(tauri::LogicalPosition::new(rect.x, rect.y))
+        .and_then(|_| webview.set_size(tauri::LogicalSize::new(rect.width.max(1.0), rect.height.max(1.0))))
+        .map_err(|e| e.to_string())
+}
+
+/// Opens (or re-places) the panel of `slot` at `rect` (CSS px of the main page). Returns its CDP port.
+// async: creating a webview from a sync command can deadlock the main thread on Windows
+#[tauri::command]
+async fn browser_open(app: AppHandle, payload: BrowserOpenPayload) -> Result<u16, String> {
+    let port = browser_port(payload.slot).ok_or("Invalid browser slot")?;
+    if let Ok(webview) = browser_webview(&app, payload.slot) {
+        place_webview(&webview, payload.rect)?;
+        return Ok(port);
+    }
+    let window = app.get_window("main").ok_or("Main window not found")?;
+    let url = browser_url(payload.url.as_deref().unwrap_or("about:blank"))?;
+    let data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join(browser_label(payload.slot));
+    let events = app.clone();
+    let popups = app.clone();
+    let slot = payload.slot;
+    let builder = tauri::webview::WebviewBuilder::new(browser_label(slot), tauri::WebviewUrl::External(url))
+        .data_directory(data_dir)
+        .additional_browser_args(&format!(
+            "--remote-debugging-port={} --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection",
+            port
+        ))
+        .on_navigation(move |url| {
+            let _ = events.emit("browser:navigated", json!({ "slot": slot, "url": url.as_str() }));
+            true
+        })
+        // Pop-ups / target=_blank open inside the panel instead of a separate window, so every
+        // page lives in the panel and goes away when the panel is closed
+        .on_new_window(move |url, _features| {
+            let app = popups.clone();
+            let _ = popups.run_on_main_thread(move || {
+                if let Ok(webview) = browser_webview(&app, slot) {
+                    let _ = webview.navigate(url);
+                }
+            });
+            tauri::webview::NewWindowResponse::Deny
+        });
+    let r = payload.rect;
+    window
+        .add_child(
+            builder,
+            tauri::LogicalPosition::new(r.x, r.y),
+            tauri::LogicalSize::new(r.width.max(1.0), r.height.max(1.0)),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(port)
+}
+
+#[tauri::command]
+async fn browser_bounds(app: AppHandle, slot: u8, rect: BrowserRect) -> Result<(), String> {
+    place_webview(&browser_webview(&app, slot)?, rect)
+}
+
+/// Hide / show every panel: HTML overlays (dialogs, Ctrl+K, drag & drop) cannot be drawn
+/// above a native webview, so the panels step aside while one is open.
+#[tauri::command]
+async fn browser_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+    (0..BROWSER_SLOTS)
+        .filter_map(|slot| browser_webview(&app, slot).ok())
+        .try_for_each(|webview| if visible { webview.show() } else { webview.hide() })
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn browser_navigate(app: AppHandle, slot: u8, url: String) -> Result<(), String> {
+    let url = browser_url(&url)?;
+    browser_webview(&app, slot)?.navigate(url).map_err(|e| e.to_string())
+}
+
+/// back / forward / reload
+#[tauri::command]
+async fn browser_history(app: AppHandle, slot: u8, action: String) -> Result<(), String> {
+    let script = match action.as_str() {
+        "back" => "history.back()",
+        "forward" => "history.forward()",
+        "reload" => "location.reload()",
+        _ => return Err("Unknown action".into()),
+    };
+    browser_webview(&app, slot)?.eval(script).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn browser_close(app: AppHandle, slot: u8) -> Result<(), String> {
+    match browser_webview(&app, slot) {
+        Ok(webview) => webview.close().map_err(|e| e.to_string()),
+        Err(_) => Ok(()), // already closed
+    }
+}
+
+/// CLI arguments for a terminal launch with the panel of `slot` (chat mode adds them itself)
+#[tauri::command]
+fn browser_launch_args(cli: String, slot: u8) -> Result<String, String> {
+    browser_cli_args(&cli, slot)
+}
+
+// ---------------------------------------------------------------------------
+// Image attachments for chat: pasted / picked / dropped images are copied into one app
+// folder; claude gets read access to that folder only (--add-dir), codex gets -i <file>.
+// ---------------------------------------------------------------------------
+
+const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+const ATTACHMENT_MAX_BYTES: usize = 20 * 1024 * 1024;
+const ATTACHMENT_KEEP_DAYS: u64 = 1;
+const IMAGES_PER_MESSAGE: usize = 10;
+
+/// `attachments` next to the program (keeps the C: drive free when the app runs from another
+/// drive). When that folder cannot be written — e.g. an install under C:\Program Files — the
+/// per-user app data folder is used instead. Decided once per run.
+fn attachments_dir() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|dir| dir.join("attachments")))
+            .filter(|dir| is_writable_dir(dir))
+            .unwrap_or_else(|| get_standard_appdata_dir().join("attachments"))
+    })
+    .clone()
+}
+
+/// Creates the folder if needed and proves a file can be written in it
+fn is_writable_dir(dir: &Path) -> bool {
+    let probe = dir.join(".write-test");
+    let ok = fs::create_dir_all(dir).is_ok() && fs::write(&probe, b"").is_ok();
+    let _ = fs::remove_file(&probe);
+    ok
+}
+
+fn image_extension(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .filter(|e| IMAGE_EXTENSIONS.contains(&e.as_str()))
+}
+
+/// Pure: standard base64 (with or without padding / data-URL prefix) -> bytes
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    let body = input.split_once(',').map_or(input, |(head, rest)| if head.contains("base64") { rest } else { input });
+    let value = |c: u8| -> Result<u32, String> {
+        match c {
+            b'A'..=b'Z' => Ok((c - b'A') as u32),
+            b'a'..=b'z' => Ok((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Ok((c - b'0' + 52) as u32),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err("Invalid base64".into()),
+        }
+    };
+    let clean: Vec<u8> = body.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=').collect();
+    clean
+        .chunks(4)
+        .map(|chunk| {
+            let n = chunk.iter().try_fold(0u32, |acc, &c| Ok::<u32, String>((acc << 6) | value(c)?))? << (6 * (4 - chunk.len()));
+            let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+            match chunk.len() {
+                4 => Ok(bytes.to_vec()),
+                3 => Ok(bytes[..2].to_vec()),
+                2 => Ok(bytes[..1].to_vec()),
+                _ => Err("Invalid base64 length".to_string()),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|parts| parts.concat())
+}
+
+/// Pure: bytes -> standard base64
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    bytes
+        .chunks(3)
+        .flat_map(|chunk| {
+            let n = chunk.iter().enumerate().fold(0u32, |acc, (i, &b)| acc | (b as u32) << (16 - 8 * i));
+            (0..4).map(move |i| if i <= chunk.len() { ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' })
+        })
+        .collect()
+}
+
+/// A new, unique file in the attachments folder
+fn new_attachment_path(extension: &str) -> Result<PathBuf, String> {
+    let dir = attachments_dir();
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stamp = now_ms();
+    let nonce = std::process::id() as u64 ^ (stamp.rotate_left(17));
+    Ok(dir.join(format!("img-{}-{:x}.{}", stamp, nonce & 0xffff_ffff, extension)))
+}
+
+/// The path must be an image file inside the attachments folder (canonical, no tricks)
+fn checked_attachment(path: &str) -> Result<PathBuf, String> {
+    let dir = fs::canonicalize(attachments_dir()).map_err(|_| "No attachments yet".to_string())?;
+    let file = fs::canonicalize(path).map_err(|_| format!("Attachment not found: {}", path))?;
+    if !file.starts_with(&dir) || image_extension(&file).is_none() || !file.is_file() {
+        return Err(format!("Not an attachment: {}", path));
+    }
+    Ok(file)
+}
+
+/// CLI arguments for the images of one chat turn
+fn image_cli_args(cli: &str, images: &[String]) -> Result<String, String> {
+    if images.is_empty() {
+        return Ok(String::new());
+    }
+    if images.len() > IMAGES_PER_MESSAGE {
+        return Err(format!("Up to {} images per message", IMAGES_PER_MESSAGE));
+    }
+    let files = images.iter().map(|p| checked_attachment(p)).collect::<Result<Vec<_>, _>>()?;
+    match cli {
+        "claude" => Ok(format!(" --add-dir {}", ps_single_quote(&attachments_dir().to_string_lossy()))),
+        "codex" => Ok(files.iter().map(|f| format!(" -i {}", ps_single_quote(&f.to_string_lossy()))).collect()),
+        _ => Err("Images are only supported for claude and codex".into()),
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct AttachmentPayload {
+    /// Original file name (only its extension is used)
+    pub name: String,
+    /// base64 (a data URL is accepted too)
+    pub data: String,
+}
+
+/// Pasted image (clipboard) -> file in the attachments folder. Returns its path.
+#[tauri::command]
+async fn save_attachment(payload: AttachmentPayload) -> Result<String, String> {
+    let ext = image_extension(Path::new(&payload.name)).unwrap_or_else(|| "png".into());
+    let bytes = base64_decode(&payload.data)?;
+    if bytes.is_empty() || bytes.len() > ATTACHMENT_MAX_BYTES {
+        return Err("Image is empty or larger than 20 MB".into());
+    }
+    let path = new_attachment_path(&ext)?;
+    fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Picked / dropped image file -> copy in the attachments folder. Returns the copy's path.
+#[tauri::command]
+async fn import_attachment(path: String) -> Result<String, String> {
+    let source = PathBuf::from(&path);
+    let ext = image_extension(&source).ok_or("Only image files (png, jpg, gif, webp, bmp) can be attached")?;
+    let size = fs::metadata(&source).map_err(|e| e.to_string())?.len() as usize;
+    if size == 0 || size > ATTACHMENT_MAX_BYTES {
+        return Err("Image is empty or larger than 20 MB".into());
+    }
+    let target = new_attachment_path(&ext)?;
+    fs::copy(&source, &target).map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().to_string())
+}
+
+/// Thumbnail source for an attachment: a data URL
+#[tauri::command]
+async fn attachment_preview(path: String) -> Result<String, String> {
+    let file = checked_attachment(&path)?;
+    let ext = image_extension(&file).unwrap_or_else(|| "png".into());
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        _ => "image/png",
+    };
+    let bytes = fs::read(&file).map_err(|e| e.to_string())?;
+    Ok(format!("data:{};base64,{}", mime, base64_encode(&bytes)))
+}
+
+/// Attachments older than ATTACHMENT_KEEP_DAYS (1 day) are removed at start-up
+fn cleanup_attachments() {
+    let limit = now_ms().saturating_sub(ATTACHMENT_KEEP_DAYS * 24 * 60 * 60 * 1000);
+    // the current folder, plus the app-data one used before (or as fallback)
+    let mut dirs = vec![attachments_dir(), get_standard_appdata_dir().join("attachments")];
+    dirs.dedup();
+    dirs.iter()
+        .filter_map(|dir| fs::read_dir(dir).ok())
+        .flat_map(|entries| entries.flatten())
+        .filter(|e| e.metadata().map(|m| m.is_file() && modified_ms(&m) < limit).unwrap_or(false))
+        .for_each(|e| {
+            let _ = fs::remove_file(e.path());
+        });
+}
+
+// ---------------------------------------------------------------------------
 // Chat (non-interactive CLI processes)
 // ---------------------------------------------------------------------------
 
@@ -1644,6 +2028,13 @@ fn build_chat_cli_command(payload: &ChatSendPayload) -> Result<String, String> {
         return Err("/btw is only supported for claude".into());
     }
     let mode = payload.permission_mode.as_deref();
+    // Playwright MCP for the session's browser panel (not for /btw, which has no tools)
+    let browser = match payload.browser_slot {
+        Some(slot) if !payload.side => browser_cli_args(&payload.cli, slot)?,
+        _ => String::new(),
+    };
+    // Images: claude reads them from the attachments folder (named in the prompt), codex gets -i
+    let images = if payload.side { String::new() } else { image_cli_args(&payload.cli, &payload.images)? };
 
     match payload.cli.as_str() {
         // `/btw` is interactive-only in the CLI, so the app emulates it: the question runs on a
@@ -1660,10 +2051,12 @@ fn build_chat_cli_command(payload: &ChatSendPayload) -> Result<String, String> {
                 _ => "acceptEdits",
             };
             Ok(format!(
-                "{} --permission-mode {}{}",
+                "{} --permission-mode {}{}{}{}",
                 CLAUDE_STREAM_JSON,
                 mode,
-                resume.map(|id| format!(" --resume {}", id)).unwrap_or_default()
+                resume.map(|id| format!(" --resume {}", id)).unwrap_or_default(),
+                browser,
+                images
             ))
         }
         "codex" => {
@@ -1672,7 +2065,9 @@ fn build_chat_cli_command(payload: &ChatSendPayload) -> Result<String, String> {
                 _ => "workspace-write",
             };
             Ok(format!(
-                "codex exec --json --skip-git-repo-check --sandbox {}{} -",
+                "codex exec{}{} --json --skip-git-repo-check --sandbox {}{} -",
+                browser,
+                images,
                 sandbox,
                 resume.map(|id| format!(" resume {}", id)).unwrap_or_default()
             ))
@@ -1828,10 +2223,21 @@ pub fn run() {
             paths_exist,
             read_transcript,
             system_usage,
+            browser_open,
+            browser_bounds,
+            browser_visible,
+            browser_navigate,
+            browser_history,
+            browser_close,
+            browser_launch_args,
+            save_attachment,
+            import_attachment,
+            attachment_preview,
             list_cli_commands,
             confirm_quit
         ])
         .setup(|app| {
+            std::thread::spawn(cleanup_attachments);
             #[cfg(target_os = "windows")]
             if let Some(main) = app.get_webview_window("main") {
                 if let Ok(hwnd) = main.hwnd() {
@@ -1840,6 +2246,13 @@ pub fn run() {
                     }
                 }
                 disable_browser_shortcuts(&main);
+            }
+            // The app page keeps following the window size once browser panels (child
+            // webviews) are added next to it
+            if let Some(page) = app.get_webview("main") {
+                if let Err(e) = page.set_auto_resize(true) {
+                    eprintln!("[ACPL] auto-resize of the main webview failed: {e}");
+                }
             }
             #[cfg(not(target_os = "windows"))]
             let _ = app;

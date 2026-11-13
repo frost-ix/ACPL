@@ -17,21 +17,36 @@ import {
   termInstances,
   chatInstances
 } from './state.js';
+import {
+  BROWSER_CLIS,
+  renderPanes,
+  showSession,
+  hidePanes,
+  removeSession,
+  panesEmpty,
+  focusedSession,
+  refreshPaneHeaders,
+  browserSlotOf,
+  markLaunchedWithBrowser,
+  showDropZones,
+  hideDropZones,
+  dropTargetOf,
+  highlightDropTarget,
+  dropFolder
+} from './panes.js';
 import { saveAllConfig, debouncedSaveConfig } from './config.js';
 import {
   getCommandToRun,
   createTerminalInstance,
   fitAndResizeTerminal,
-  updateXtermTheme,
-  getQuotaDisplayText
+  updateXtermTheme
 } from './terminal.js';
 import {
   getViewMode,
   startChatSession,
   resetChat,
   destroyChatInstance,
-  refreshChatTexts,
-  focusChatInput
+  refreshChatTexts
 } from './chat.js';
 import { runUsageProbe, applyCachedUsage } from './usage.js';
 import {
@@ -72,10 +87,11 @@ import {
   shortPath,
   formatAgo as formatAgoWith,
   formatDuration,
+  formatShortDate,
   debounce
 } from './util.js';
-import { inlineInput, onActions } from './dom.js';
-import { setTitlebarText, refreshTitlebarTexts } from './titlebar.js';
+import { inlineInput, onActions, beginPointerDrag, notifyOverlay } from './dom.js';
+import { setTitlebarText, refreshTitlebarTexts, setSessionActionsEnabled } from './titlebar.js';
 import { systemStatusSlot } from './sysmon.js';
 
 // Show one runtime container (terminal / chat / welcome), hide the rest
@@ -84,9 +100,6 @@ const setVisible = (el, visible, display = 'block') => {
   el.style.display = visible ? display : 'none';
 };
 
-function hideAllChatContainers() {
-  Object.values(chatInstances).forEach((c) => setVisible(c.container, false));
-}
 
 const THEMES = {
   light: { icon: '☀️', label: 'lightTheme' },
@@ -120,11 +133,11 @@ const STATIC_TEXTS = [
   ['#btn-open-switcher', { title: 'switcherBtnTitle' }],
   ['#btn-open-switcher .switcher-btn-label', { text: 'switcherBtn' }],
   ['#btn-theme-toggle', { title: 'themeToggleTitle' }],
+  ['#btn-extract-chat', { text: 'extractChatBtn', title: 'extractChatTitle' }],
+  ['#btn-export-report', { text: 'reportPdfBtn', title: 'reportPdfTitle' }],
   ['#select-lang', { title: 'langSelectTitle' }],
   ['#btn-save', { title: 'saveConfigTitle' }],
   ['#btn-save .sidebar-text', { text: 'saveConfigBtn' }],
-  ['#btn-extract-chat', { text: 'extractChatBtn', title: 'extractChatTitle' }],
-  ['#btn-export-report', { text: 'reportPdfBtn', title: 'reportPdfTitle' }],
   ['#confirm-modal .modal-title', { text: 'modalCloseTitle' }],
   ['#confirm-modal .modal-desc', { text: 'modalCloseDesc' }],
   ['#modal-btn-confirm', { text: 'modalConfirm' }],
@@ -144,8 +157,7 @@ export function updateUILanguage() {
   if (selectLang) selectLang.value = getCurrentLang();
 
   renderFolderCards();
-  renderSessionTabs();
-  renderUsageStatusBar();
+  renderSessionIndicators();
   Object.keys(chatInstances).forEach(refreshChatTexts);
 
   const welcome = getWelcomeContainerInstance();
@@ -186,8 +198,7 @@ export function renderWelcomeManual(force = false) {
     welcomeInstance.innerHTML = welcomeHtml();
   }
 
-  Object.values(termInstances).forEach((inst) => setVisible(inst.container, false));
-  hideAllChatContainers();
+  hidePanes();
   setVisible(welcomeInstance, true, 'flex');
 }
 
@@ -210,26 +221,22 @@ function syncSelectedRow(folderId) {
 export function selectActiveFolder(folderId, isLaunching = false) {
   setActiveFolderId(folderId);
   syncSelectedRow(folderId);
-  renderSessionTabs();
-  renderUsageStatusBar();
+  renderSessionIndicators();
 
   const target = getFolder(folderId);
-  setTitlebarText(target ? displayName(target) : '');
   if (!isLaunching && !getFolders().some((f) => f.isActive) && !(target && target.isActive)) {
     renderWelcomeManual();
     return;
   }
   const welcome = getWelcomeContainerInstance();
   if (welcome) setVisible(welcome, false);
-
-  const showChat = !!(target && target.runningMode === 'chat' && chatInstances[folderId]);
-  Object.entries(chatInstances).forEach(([id, chat]) => setVisible(chat.container, showChat && id === folderId, 'flex'));
-  if (showChat) focusChatInput(folderId);
-
-  Object.entries(termInstances).forEach(([id, inst]) => setVisible(inst.container, id === folderId && !showChat));
-  if (!showChat && termInstances[folderId]) {
-    requestAnimationFrame(() => setTimeout(() => fitAndResizeTerminal(folderId), 30));
-  }
+  // A running (or starting) session is shown in the panes; selecting a stopped folder only
+  // changes the sidebar selection
+  if (target && (target.isActive || isLaunching)) showSession(folderId);
+  else if (panesEmpty()) {
+    const running = getFolders().find((f) => f.isActive);
+    if (running) showSession(running.id);
+  } else renderPanes();
 }
 
 const ansiLine = (color, text) => `\x1b[${color}m${text}\x1b[0m\r\n`;
@@ -251,7 +258,14 @@ async function launchTerminal(folderId, resumeId) {
   const inst = termInstances[folderId] || createTerminalInstance(folderId);
   selectActiveFolder(folderId, true);
 
-  const { command, resumed } = buildSessionCommand(folder, getCommandToRun(folder.cli, folder.customCommand), resumeId);
+  // A browser panel next to the session: its Playwright MCP goes on the command line
+  const slot = browserSlotOf(folderId);
+  const browserArgs = slot !== null && BROWSER_CLIS.includes(folder.cli)
+    ? (await window.api.browserLaunchArgs(folder.cli, slot)) || ''
+    : '';
+  markLaunchedWithBrowser(folderId, !!browserArgs);
+  const base = getCommandToRun(folder.cli, folder.customCommand);
+  const { command, resumed } = buildSessionCommand(folder, base ? base + browserArgs : base, resumeId);
   const launchedAt = Date.now();
   inst.term.clear();
   inst.sessionRawText = '';
@@ -331,29 +345,37 @@ export function openCloseModal(folderId) {
       ? `Are you sure you want to terminate [${name}] (${cliName}) session and running CLI?`
       : `[${name}] (${cliName}) 세션 및 실행 중인 CLI를 종료하시겠습니까?`;
   }
+  setConfirmModal(true);
+}
+
+// The static "close session?" dialog (index.html); browser panels step aside while it is open
+export function setConfirmModal(open) {
   const modal = document.getElementById('confirm-modal');
-  if (modal) modal.classList.remove('hidden');
+  if (modal) modal.classList.toggle('hidden', !open);
+  notifyOverlay('confirm', open);
 }
 
 // Re-render the list and show `nextId` (or the welcome card when there is none)
 function showFolderOrWelcome(nextId) {
   renderFolderCards();
-  renderSessionTabs();
+  renderSessionIndicators();
   if (nextId) selectActiveFolder(nextId);
   else renderWelcomeManual();
 }
 
 const firstRunningId = () => (getFolders().find((f) => f.isActive) || {}).id || null;
+// Next session to show: the pane that keeps the focus, else any running one
+const nextShownId = () => focusedSession() || firstRunningId();
 
 export async function closeFolderSessionConfirmed() {
   const folderId = getPendingCloseFolderId();
   if (!folderId) return;
   setPendingCloseFolderId(null);
-  const modal = document.getElementById('confirm-modal');
-  if (modal) modal.classList.add('hidden');
+  setConfirmModal(false);
 
   const folder = getFolder(folderId);
   if (folder) updateFolder(folderId, { isActive: false });
+  removeSession(folderId);
   flushSessionWatch(folderId);
   if (folder && folder.runningMode === 'chat') resetChat(folderId);
   else await window.api.killPty({ sessionId: folderId });
@@ -363,7 +385,7 @@ export async function closeFolderSessionConfirmed() {
     inst.isSpawned = false;
     inst.term.clear();
   }
-  showFolderOrWelcome(firstRunningId());
+  showFolderOrWelcome(nextShownId());
 }
 
 function disposeTerminal(folderId) {
@@ -380,15 +402,16 @@ function disposeTerminal(folderId) {
 
 export function removeFolderCard(folderId) {
   stopSessionWatch(folderId);
+  removeSession(folderId);
   window.api.killPty({ sessionId: folderId });
   destroyChatInstance(folderId);
   disposeTerminal(folderId);
   updateFolders((list) => list.filter((f) => f.id !== folderId));
 
-  // The removed folder was selected: fall back to a running one, else the first folder
+  // The removed folder was selected: fall back to a shown / running one, else the first folder
   const current = getActiveFolderId();
   const first = getFolders()[0];
-  showFolderOrWelcome(current !== folderId ? current : firstRunningId() || (first && first.id) || null);
+  showFolderOrWelcome(current !== folderId ? current : nextShownId() || (first && first.id) || null);
   saveAllConfig();
 }
 
@@ -597,50 +620,48 @@ export function renderFolderCards() {
   list.scrollTop = scrollTop;
 }
 
-// --- Drag a folder row onto a group (mouse based: Tauri's file-drop handler blocks HTML5 DnD) ---
-const DRAG_THRESHOLD_PX = 6;
+// --- Drag & drop (mouse based, dom.js beginPointerDrag) ---
+// Sidebar group sections as drop targets
+const groupTargetOf = (el) => {
+  const section = el && el.closest && el.closest('.folder-section[data-drop]');
+  if (!section) return null;
+  const groupId = section.getAttribute('data-drop');
+  return { type: 'group', key: `g:${groupId}`, groupId, el: section };
+};
 
-function startRowDrag(e, folderId) {
-  if (e.button !== 0 || e.target.closest('[data-action]')) return;
-  const sidebar = document.getElementById('sidebar');
-  if (sidebar && sidebar.classList.contains('collapsed')) return;
-  const start = { x: e.clientX, y: e.clientY };
-  let drag = null; // { ghost, target } once the pointer moved far enough
+const highlightTarget = (target, on) => {
+  if (target.type === 'group') target.el.classList.toggle('drop-target', on);
+  else highlightDropTarget(target, on);
+};
 
-  const clearTargets = () => document.querySelectorAll('.folder-section.drop-target')
-    .forEach((el) => el.classList.remove('drop-target'));
-
-  const onMove = (ev) => {
-    if (!drag) {
-      if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < DRAG_THRESHOLD_PX) return;
-      const ghost = document.createElement('div');
-      ghost.className = 'folder-drag-ghost';
-      ghost.textContent = displayName(getFolder(folderId));
-      document.body.appendChild(ghost);
-      document.body.classList.add('folder-dragging');
-      drag = { ghost, target: null };
-    }
-    drag.ghost.style.transform = `translate(${ev.clientX + 12}px, ${ev.clientY + 8}px)`;
-    const under = document.elementFromPoint(ev.clientX, ev.clientY);
-    const section = under && under.closest('.folder-section[data-drop]');
-    clearTargets();
-    if (section) section.classList.add('drop-target');
-    drag = { ...drag, target: section ? section.getAttribute('data-drop') : null };
-  };
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    if (!drag) return;
-    drag.ghost.remove();
-    document.body.classList.remove('folder-dragging');
-    clearTargets();
-    if (drag.target === null) return;
-    const groupId = drag.target === UNGROUPED ? null : drag.target;
-    if (((getFolder(folderId) || {}).groupId || null) !== groupId) andRender(setFolderGroup)(folderId, groupId);
-  };
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', onUp);
+function moveToGroup(folderId, dropId) {
+  const groupId = dropId === UNGROUPED ? null : dropId;
+  if (((getFolder(folderId) || {}).groupId || null) !== groupId) andRender(setFolderGroup)(folderId, groupId);
 }
+
+// Common part: the session area shows its drop zones while something is dragged
+const paneDrag = (folderId) => ({
+  label: displayName(getFolder(folderId)),
+  onStart: () => showDropZones(folderId),
+  onEnd: hideDropZones,
+});
+
+// Folder card: onto a sidebar group (regroup) or onto the session area (show / launch there)
+function startRowDrag(e, folderId) {
+  const sidebar = document.getElementById('sidebar');
+  const collapsed = !!(sidebar && sidebar.classList.contains('collapsed'));
+  // Buttons keep their click. Collapsed: the whole card is the run toggle, so a drag may start
+  // on it (a plain click still runs / stops; a drag ends elsewhere and never clicks it).
+  const handle = e.target.closest('[data-action]');
+  if (handle && !(collapsed && handle.classList.contains('btn-run-toggle'))) return;
+  beginPointerDrag(e, {
+    ...paneDrag(folderId),
+    resolve: (el) => groupTargetOf(el) || dropTargetOf(el),
+    highlight: highlightTarget,
+    drop: (target) => (target.type === 'group' ? moveToGroup(folderId, target.groupId) : dropFolder(folderId, target)),
+  });
+}
+
 
 // --- Discovered projects (not registered yet) + root folders ---
 const DISCOVERED_SECTION = { key: 'discovered', kind: 'discovered' };
@@ -718,7 +739,6 @@ const quotaItems = (folder) => ((folder && folder.usage && folder.usage.windows)
 
 const levelOf = (pct) => (pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : 'ok');
 
-const quotaLevel = (items) => (items.length ? levelOf(Math.max(...items.map((i) => i.value))) : '');
 
 // "2h13m" / "3d4h" until reset, or the CLI's own reset text
 const formatReset = (item, now = Date.now()) => {
@@ -726,29 +746,22 @@ const formatReset = (item, now = Date.now()) => {
   return item.resetsAt <= now ? t('resetDue') : formatDuration(item.resetsAt - now);
 };
 
-export function renderSessionTabs() {
-  const bar = document.getElementById('session-tabs-bar');
-  if (!bar) return;
-  const activeFolderId = getActiveFolderId();
-  bar.replaceChildren(...getFolders().filter((f) => f.isActive).map((folder) => {
-    const name = displayName(folder);
-    const tab = document.createElement('div');
-    tab.className = `session-tab ${folder.id === activeFolderId ? 'active' : ''}`;
-    tab.title = `${name} (${folder.cli})`;
-    tab.innerHTML = `
-      <div class="tab-status-dot active"></div>
-      <span class="tab-title-text">${folder.runningMode === 'chat' ? '💬 ' : ''}${escapeHtml(name)} (${folder.cli})</span>
-      <span class="tab-quota-dot ${quotaLevel(quotaItems(folder))}" title="${escapeHtml(getQuotaDisplayText(folder))}"></span>`;
-    tab.addEventListener('click', () => selectActiveFolder(folder.id));
-    return tab;
-  }));
+// Where the current session is shown (there is no tab bar): pane headers, window title,
+// status bar. Running sessions are listed in the sidebar's "running" section.
+export function renderSessionIndicators() {
+  const current = getFolder(getActiveFolderId());
+  setTitlebarText(current ? `${displayName(current)} (${current.cli})` : '');
+  setSessionActionsEnabled(!!(current && current.isActive));
+  refreshPaneHeaders();
   renderUsageStatusBar();
 }
 
 const quotaItemHtml = (i) => {
   const lvl = levelOf(i.value);
   const reset = formatReset(i);
-  const title = `${i.label} ${i.value}%${reset ? ` · ${t('resetsLabel')} ${reset}` : ''}`;
+  // Tooltip: when exactly (system clock / local time), next to the remaining time shown in the bar
+  const when = i.resetsAt ? ` (${formatShortDate(i.resetsAt)})` : '';
+  const title = `${i.label} ${i.value}%${reset ? ` · ${t('resetsLabel')} ${reset}${when}` : ''}`;
   return `<span class="sb-item sb-quota ${lvl === 'ok' ? '' : lvl}" title="${escapeHtml(title)}"><span class="sb-muted">${escapeHtml(i.label)}</span><span class="sb-bar"><span style="width:${i.value}%"></span></span><span class="sb-pct">${i.value}%</span>${reset ? `<span class="sb-reset">↻ ${escapeHtml(reset)}</span>` : ''}</span>`;
 };
 
@@ -781,4 +794,4 @@ export function renderUsageStatusBar() {
     <div class="sb-col sb-col-right">${systemStatusSlot()}</div>`;
 }
 
-export const debouncedRenderSessionTabs = debounce(renderSessionTabs, 200);
+export const debouncedRenderSessionIndicators = debounce(renderSessionIndicators, 200);

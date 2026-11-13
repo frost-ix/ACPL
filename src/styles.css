@@ -126,6 +126,23 @@ body, html {
   overflow: hidden;
 }
 .titlebar-icon { width: 16px; height: 16px; pointer-events: none; }
+/* Left: session actions (extract / report) — pills in the app's accent colors */
+.titlebar-actions { gap: 6px; padding-left: 10px; }
+.tb-action {
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 11px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, opacity 0.15s;
+}
+.tb-extract { background-color: rgba(97, 175, 239, 0.15); border: 1px solid rgba(97, 175, 239, 0.4); color: var(--accent-primary); }
+.tb-extract:hover:not(:disabled) { background-color: var(--accent-primary); color: #fff; }
+.tb-report { background-color: rgba(152, 195, 121, 0.15); border: 1px solid rgba(152, 195, 121, 0.4); color: var(--status-active); }
+.tb-report:hover:not(:disabled) { background-color: var(--status-active); color: #fff; }
+.tb-action:disabled { opacity: 0.35; cursor: default; }
 /* Ubuntu (Yaru) style: small round buttons on the right, theme colors */
 .titlebar-controls { justify-content: flex-end; gap: 10px; padding-right: 12px; }
 .wc-btn {
@@ -667,157 +684,6 @@ body.window-unfocused .wc-btn:not(:hover) { opacity: 0.7; }
   overflow: hidden;
 }
 
-.terminal-header {
-  height: 44px;
-  padding: 0 12px;
-  background-color: var(--bg-sidebar);
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  overflow: hidden;
-  transition: background-color 0.25s, border-color 0.25s;
-}
-
-.session-tabs-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow-x: auto;
-  height: 100%;
-  flex: 1;
-  min-width: 0;
-  scrollbar-width: thin;
-}
-
-.session-tab {
-  padding: 5px 8px;
-  background-color: var(--bg-dark);
-  border: 1px solid var(--border-color);
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-  transition: all 0.2s ease-in-out;
-  flex-shrink: 1;
-  min-width: 78px;
-  max-width: 140px;
-  overflow: hidden;
-}
-
-/* Inactive tabs automatically shrink so active tab stays clearly visible and controls never overlap */
-.session-tab:not(.active) {
-  min-width: 78px;
-  max-width: 105px;
-  opacity: 0.8;
-}
-
-.session-tab:not(.active):hover {
-  max-width: 170px;
-  opacity: 1;
-}
-
-.session-tab.active {
-  background-color: var(--bg-terminal) !important;
-  color: var(--text-strong);
-  border-color: var(--border-color);
-  border-top: 2px solid var(--accent-primary);
-  min-width: 110px;
-  max-width: 220px;
-  flex-shrink: 0;
-  font-weight: 700;
-  opacity: 1;
-}
-
-.session-tab .tab-title-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 32px;
-}
-
-.session-tab .tab-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.session-tab .tab-status-dot.active {
-  background-color: var(--status-active);
-}
-
-.session-tab .tab-status-dot.inactive {
-  background-color: var(--status-inactive);
-}
-
-/* --- LIVE SESSION USAGE BADGE IN TAB --- */
-.tab-quota-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background-color: var(--status-inactive);
-}
-.tab-quota-dot.ok { background-color: var(--status-active); }
-.tab-quota-dot.warn { background-color: var(--warning-color); }
-.tab-quota-dot.danger { background-color: var(--danger-color); }
-
-.terminal-controls {
-  display: flex;
-  gap: 8px;
-  padding-left: 8px;
-}
-
-.btn-sm {
-  padding: 5px 10px;
-  font-size: 0.76rem;
-  background-color: var(--bg-dark);
-  border: 1px solid var(--border-color);
-  color: var(--text-muted);
-  border-radius: 5px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-sm:hover {
-  color: var(--text-main);
-  background-color: var(--accent-secondary);
-}
-
-/* Chat Raw Extract Button Styling (Left of Report Export) */
-.btn-extract {
-  background-color: rgba(97, 175, 239, 0.15) !important;
-  border: 1px solid rgba(97, 175, 239, 0.4) !important;
-  color: var(--accent-primary) !important;
-  font-weight: 700 !important;
-}
-
-.btn-extract:hover {
-  background-color: var(--accent-primary) !important;
-  color: white !important;
-}
-
-/* Report Export Button Styling */
-.btn-report {
-  background-color: rgba(152, 195, 121, 0.15) !important;
-  border: 1px solid rgba(152, 195, 121, 0.4) !important;
-  color: var(--status-active) !important;
-  font-weight: 700 !important;
-}
-
-.btn-report:hover {
-  background-color: var(--status-active) !important;
-  color: white !important;
-}
-
 .terminals-wrapper {
   flex: 1 1 0;
   min-height: 0;
@@ -1058,16 +924,14 @@ body.window-unfocused .wc-btn:not(:hover) { opacity: 0.7; }
 
 
 /* --- Polish: focus, hover, scrollbars --- */
-button:focus-visible, select:focus-visible, input:focus-visible, .session-tab:focus-visible, .folder-card:focus-visible {
+button:focus-visible, select:focus-visible, input:focus-visible, .folder-card:focus-visible {
   outline: 1px solid var(--accent-primary);
   outline-offset: 1px;
 }
 button { transition: background-color 0.15s, color 0.15s, border-color 0.15s; }
 .folder-card:hover { background-color: var(--accent-secondary); }
-.session-tab:not(.active):hover { background-color: var(--accent-secondary); color: var(--text-main); }
 ::-webkit-scrollbar-thumb { background: rgba(121, 128, 140, 0.4); }
 ::-webkit-scrollbar-thumb:hover { background: rgba(121, 128, 140, 0.7); }
-.session-tabs-bar { scrollbar-width: thin; scrollbar-color: rgba(121,128,140,0.4) transparent; }
 
 /* --- VS Code style bottom status bar --- */
 .status-bar {
@@ -1214,6 +1078,37 @@ button { transition: background-color 0.15s, color 0.15s, border-color 0.15s; }
   color: var(--text-strong);
   border-bottom-left-radius: 4px;
 }
+/* Code block: header (language + copy) above the code */
+.chat-code-block {
+  margin: 6px 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.chat-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px 3px 10px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.72rem;
+}
+.chat-code-lang { color: var(--text-muted); font-family: "Cascadia Mono", Consolas, monospace; }
+.chat-code-copy {
+  padding: 2px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.chat-code-copy:hover { background: var(--accent-secondary); color: var(--text-strong); }
+.chat-code-copy.copied { border-color: var(--status-active); color: var(--status-active); }
+.chat-code-block .chat-code { margin: 0; border-radius: 0; }
 .chat-code {
   margin: 6px 0;
   padding: 8px 10px;
@@ -1432,6 +1327,52 @@ button { transition: background-color 0.15s, color 0.15s, border-color 0.15s; }
   font-size: 0.72rem;
   padding: 2px 4px;
 }
+
+/* Image attachments: tray above the input, 📎 in the bar, thumbnails in the sent bubble */
+.chat-attach-btn {
+  height: 22px;
+  min-width: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--chip-bg);
+  border-radius: 6px;
+  background: var(--bg-terminal);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.chat-attach-btn:hover { border-color: var(--accent-primary); }
+.chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.chat-attachments.hidden { display: none; }
+.chat-att {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.chat-att img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chat-att-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 16px;
+  cursor: pointer;
+}
+.chat-att-remove:hover { background: var(--danger-color); }
+.chat-msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chat-msg-images img { max-width: 160px; max-height: 120px; border-radius: 6px; border: 1px solid var(--border-color); }
+/* Files dragged from Explorer over a session */
+.chat-instance.file-drop-target,
+.terminal-instance.file-drop-target { outline: 2px dashed var(--accent-primary); outline-offset: -4px; }
 .chat-status {
   flex: 1;
   font-size: 0.74rem;
@@ -1946,3 +1887,153 @@ body.folder-dragging, body.folder-dragging * { cursor: grabbing !important; user
   font-size: 0.75rem;
   border-radius: 6px;
 }
+
+/* =====================================================================
+   Session panes: up to 2 x 2 sessions, browser panel right of a session
+   ===================================================================== */
+.pane-grid {
+  position: absolute;
+  inset: 0;
+  display: none;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  background-color: var(--border-color);
+}
+.pane-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background-color: var(--bg-terminal);
+}
+.pane-body { position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; }
+.pane-body > .terminal-instance,
+.pane-body > .chat-instance { height: 100%; }
+/* Cell header (always shown: it carries the browser toggle, also for a single session);
+   the focus underline is only meaningful when the area is split */
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  flex: 0 0 26px;
+  padding: 0 6px 0 8px;
+  background-color: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  user-select: none;
+}
+/* Split view: the header is a drag handle (move / swap panes) */
+.pane-grid.multi .pane-session .pane-head { cursor: grab; }
+.pane-grid.multi .pane-session .pane-head .pane-btn { cursor: pointer; }
+.pane-grid.multi .pane-session.focused .pane-head { color: var(--text-strong); box-shadow: inset 0 -2px 0 var(--accent-primary); }
+.pane-grid:not(.multi) .pane-head { color: var(--text-main); }
+.pane-dot { width: 7px; height: 7px; border-radius: 50%; background-color: var(--status-inactive); flex-shrink: 0; }
+.pane-dot.on { background-color: var(--status-active); }
+.pane-title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-cli { color: var(--accent-primary); text-transform: uppercase; font-weight: 600; font-size: 0.68rem; }
+.pane-spacer { flex: 1; }
+.pane-btn {
+  height: 20px;
+  min-width: 22px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.pane-btn:hover:not(:disabled) { background-color: var(--accent-secondary); color: var(--text-strong); }
+.pane-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.pane-btn.on { color: var(--accent-primary); }
+.pane-placeholder {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.pane-launch {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 5px;
+  background-color: var(--accent-primary);
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.pane-launch:hover { background-color: var(--accent-hover); }
+
+/* Browser cell: address bar above the native panel (the panel covers .browser-body) */
+.browser-url {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background-color: var(--bg-terminal);
+  color: var(--text-main);
+  font-size: 0.74rem;
+  outline: none;
+}
+.browser-url:focus { border-color: var(--accent-primary); }
+.browser-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  color: var(--warning-color);
+  background-color: var(--surface-1);
+  border-bottom: 1px solid var(--border-color);
+}
+.browser-note.hidden { display: none; }
+.browser-note .pane-launch { padding: 2px 8px; font-size: 0.7rem; }
+.browser-body { background-color: var(--bg-card); }
+
+/* Drop zones shown while a folder card / session tab is dragged */
+.pane-drop-layer { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
+.pane-drop {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  border: 1px dashed rgba(97, 175, 239, 0.25);
+  border-radius: 6px;
+  color: transparent;
+  font-size: 1.4rem;
+  transition: background-color 0.1s, border-color 0.1s;
+}
+.pane-drop.active {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+/* The real area the session will take after the drop */
+.pane-drop-preview {
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px solid var(--accent-primary);
+  border-radius: 6px;
+  background-color: rgba(97, 175, 239, 0.18);
+  transition: left 0.08s, top 0.08s, width 0.08s, height 0.08s;
+}
+.pane-drop-preview.hidden { display: none; }
+
+/* Resize handles on the borders between panes */
+.pane-split { position: absolute; z-index: 5; background: transparent; transition: background-color 0.1s; }
+.pane-split-col { width: 7px; transform: translateX(-50%); cursor: col-resize; }
+.pane-split-row { left: 0; right: 0; height: 7px; transform: translateY(-50%); cursor: row-resize; }
+.pane-split:hover,
+body.pane-resizing-col .pane-split-col,
+body.pane-resizing-row .pane-split-row { background-color: rgba(97, 175, 239, 0.45); }
+body.pane-resizing-col, body.pane-resizing-col * { cursor: col-resize !important; user-select: none !important; }
+body.pane-resizing-row, body.pane-resizing-row * { cursor: row-resize !important; user-select: none !important; }

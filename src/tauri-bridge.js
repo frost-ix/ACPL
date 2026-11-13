@@ -120,6 +120,40 @@
     readTranscript: withPayload('readTranscript', 'read_transcript', Object.freeze({ found: false, messages: [] })),
     // [path] -> [bool] (folder still exists)
     pathsExist: (paths) => invoke('pathsExist', 'paths_exist', { paths }, null),
+    // Browser panels (child webviews next to a session). rect: CSS px of the page.
+    browserOpen: (payload) => invoke('browserOpen', 'browser_open', { payload }, null),
+    browserBounds: (slot, rect) => invoke('browserBounds', 'browser_bounds', { slot, rect }, null),
+    browserVisible: (visible) => invoke('browserVisible', 'browser_visible', { visible }, null),
+    browserNavigate: (slot, url) => invoke('browserNavigate', 'browser_navigate', { slot, url }, null),
+    browserHistory: (slot, action) => invoke('browserHistory', 'browser_history', { slot, action }, null),
+    browserClose: (slot) => invoke('browserClose', 'browser_close', { slot }, null),
+    // Extra CLI arguments (Playwright MCP) for a terminal launch with a browser panel
+    browserLaunchArgs: (cli, slot) => invoke('browserLaunchArgs', 'browser_launch_args', { cli, slot }, ''),
+    onBrowserNavigated: listener('browser:navigated'),
+
+    // Chat image attachments: stored in the app's attachments folder, path returned
+    saveAttachment: (name, data) => invoke('saveAttachment', 'save_attachment', { payload: { name, data } }, null),
+    importAttachment: (path) => invoke('importAttachment', 'import_attachment', { path }, null),
+    attachmentPreview: (path) => invoke('attachmentPreview', 'attachment_preview', { path }, null),
+    openImages: async () => {
+      const options = { multiple: true, filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }] };
+      try {
+        const plugin = window.__TAURI_PLUGIN_DIALOG__ || (window.__TAURI__ && window.__TAURI__.dialog);
+        const picked = plugin && plugin.open
+          ? await plugin.open(options)
+          : await invoke('openImages', 'plugin:dialog|open', { options }, null);
+        if (!picked) return [];
+        return Array.isArray(picked) ? picked : [picked];
+      } catch (e) {
+        logError('openImages')(e);
+        return [];
+      }
+    },
+    // Files dragged from Explorer onto the window: { paths, position } (physical px)
+    onFileDrop: listener('tauri://drag-drop'),
+    onFileDragOver: listener('tauri://drag-over'),
+    onFileDragLeave: listener('tauri://drag-leave'),
+
     // Status bar monitor: { cpu: % | null, memUsed, memTotal, appMem } (bytes)
     systemUsage: () => invoke('systemUsage', 'system_usage', undefined, null),
     // Slash commands for the chat palette: [{ name, description, source, content? }]

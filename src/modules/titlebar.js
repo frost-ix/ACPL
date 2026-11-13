@@ -38,6 +38,16 @@ function guardMenuKeys() {
   });
 }
 
+// Left side: extract / report work on the current session, so they wait for a running one
+const SESSION_ACTIONS = ['btn-extract-chat', 'btn-export-report'];
+
+export function setSessionActionsEnabled(enabled) {
+  SESSION_ACTIONS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !enabled;
+  });
+}
+
 export function setTitlebarText(text) {
   const el = document.getElementById('titlebar-text');
   if (el) el.textContent = text ? `ACPL — ${text}` : 'ACPL';

@@ -12,7 +12,9 @@ import { applyUsageForCli, parseRateLimitWindows, addFolderUsage } from './usage
 import { setSessionRef, clearSessionRef, loadTranscript } from './session.js';
 import { lastTurns } from './transcript.js';
 import { escapeHtml, clip, oneLine, appendCapped } from './util.js';
-import { isNearBottom } from './dom.js';
+import { isNearBottom, copyText } from './dom.js';
+import { browserSlotOf } from './panes.js';
+import { attachImageTray, promptWithImages, imagesHtml } from './attachments.js';
 import {
   attachCommandPalette,
   loadDiskCommands,
@@ -53,15 +55,41 @@ export function getViewMode(folder) {
   return folder.viewMode === 'terminal' ? 'terminal' : 'chat';
 }
 
+// Code block with a header: language label + copy button (handled by onCodeCopyClick)
+const codeBlockHtml = (code, lang) => `
+  <div class="chat-code-block">
+    <div class="chat-code-head">
+      <span class="chat-code-lang">${escapeHtml(lang || 'code')}</span>
+      <button type="button" class="chat-code-copy" title="${escapeHtml(t('copyCodeTitle'))}">⧉ ${escapeHtml(t('copyCode'))}</button>
+    </div>
+    <pre class="chat-code"><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>
+  </div>`;
+
+const COPY_FEEDBACK_MS = 1500;
+
+async function onCodeCopyClick(e) {
+  const btn = e.target.closest('.chat-code-copy');
+  if (!btn) return;
+  const code = btn.closest('.chat-code-block').querySelector('code');
+  const ok = await copyText(code ? code.textContent : '');
+  btn.classList.toggle('copied', ok);
+  btn.textContent = ok ? `✓ ${t('copiedCode')}` : `✗ ${t('copyFailed')}`;
+  setTimeout(() => {
+    if (!btn.isConnected) return;
+    btn.classList.remove('copied');
+    btn.textContent = `⧉ ${t('copyCode')}`;
+  }, COPY_FEEDBACK_MS);
+}
+
 // Lightweight markdown: code fences, inline code, bold, headings, line breaks
 function renderMarkdown(text) {
   const parts = String(text || '').split(/```/);
   return parts.map((part, i) => {
     if (i % 2 === 1) {
       const nl = part.indexOf('\n');
-      const lang = nl >= 0 ? part.slice(0, nl).trim() : '';
-      const code = nl >= 0 && /^[\w+#.-]*$/.test(lang) ? part.slice(nl + 1) : part;
-      return `<pre class="chat-code"><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`;
+      const first = nl >= 0 ? part.slice(0, nl).trim() : '';
+      const hasLang = nl >= 0 && /^[\w+#.-]*$/.test(first);
+      return codeBlockHtml(hasLang ? part.slice(nl + 1) : part, hasLang ? first : '');
     }
     return escapeHtml(part)
       .replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>')
@@ -98,8 +126,10 @@ export function createChatInstance(folderId) {
     <div class="chat-messages"></div>
     <div class="chat-queue"></div>
     <div class="chat-composer">
+      <div class="chat-attachments hidden"></div>
       <textarea class="chat-input" rows="1" spellcheck="false"></textarea>
       <div class="chat-composer-bar">
+        <button class="chat-attach-btn" type="button">📎</button>
         <select class="chat-perm-select"></select>
         <span class="chat-status"></span>
         <button class="chat-send-btn"></button>
@@ -114,6 +144,7 @@ export function createChatInstance(folderId) {
     queueEl: container.querySelector('.chat-queue'),
     inputEl: container.querySelector('.chat-input'),
     permSelect: container.querySelector('.chat-perm-select'),
+    attachBtn: container.querySelector('.chat-attach-btn'),
     statusEl: container.querySelector('.chat-status'),
     sendBtn: container.querySelector('.chat-send-btn'),
     messages: [],
@@ -131,6 +162,9 @@ export function createChatInstance(folderId) {
   chatInstances[folderId] = inst;
 
   inst.palette = attachCommandPalette(inst, () => getFolder(folderId));
+  inst.images = attachImageTray(inst);
+  // One listener for every code block (answers, history, /btw); blocks are re-rendered while streaming
+  inst.listEl.addEventListener('click', onCodeCopyClick);
 
   inst.inputEl.addEventListener('keydown', (e) => {
     if (inst.palette.handleKeydown(e)) return;
@@ -161,6 +195,7 @@ export function refreshChatTexts(folderId) {
   const folder = getFolder(folderId);
   if (!inst || !folder) return;
   inst.inputEl.placeholder = t('chatPlaceholder');
+  inst.attachBtn.title = t('attachTitle');
   renderPermissionOptions(inst, folder);
   updateBusyUi(inst);
 }
@@ -245,7 +280,8 @@ function addMessage(inst, msg) {
   const el = document.createElement('div');
   el.className = `chat-row chat-row-${msg.role}`;
   if (msg.role === 'user' || msg.role === 'assistant') {
-    el.innerHTML = `<div class="chat-bubble chat-bubble-${msg.role}">${msg.role === 'user' ? userHtml(msg.text) : renderMarkdown(msg.text)}</div>`;
+    const body = msg.role === 'user' ? `${userHtml(msg.text)}${imagesHtml(msg.images)}` : renderMarkdown(msg.text);
+    el.innerHTML = `<div class="chat-bubble chat-bubble-${msg.role}">${body}</div>`;
   } else {
     el.innerHTML = '<div class="chat-notice"></div>';
     el.firstElementChild.textContent = msg.text;
@@ -568,27 +604,29 @@ function submitInput(folderId) {
   const inst = chatInstances[folderId];
   if (!inst) return;
   const text = inst.inputEl.value.trim();
-  if (!text) return;
+  const hasImages = inst.attachments.length > 0;
+  if (!text && !hasImages) return;
   inst.inputEl.value = '';
   autoResize(inst.inputEl);
   inst.palette.close();
-  // /clear: handled by the app (see clearConversation)
-  if (CLEAR_RE.test(text)) {
-    clearConversation(folderId);
+  // App commands (only as plain text, without images)
+  if (!hasImages && CLEAR_RE.test(text)) {
+    clearConversation(folderId); // /clear: handled by the app
     return;
   }
   // /btw goes out right away, even while the main turn is still running
   const folder = getFolder(folderId);
-  const btw = folder && folder.cli === 'claude' ? text.match(BTW_RE) : null;
+  const btw = !hasImages && folder && folder.cli === 'claude' ? text.match(BTW_RE) : null;
   if (btw) {
     sendSideQuestion(folderId, (btw[1] || '').trim());
     return;
   }
+  const images = inst.images.take();
   if (inst.isBusy) {
-    enqueuePrompt(inst, text);
+    enqueuePrompt(inst, text, images);
     return;
   }
-  sendChatPrompt(folderId, text);
+  sendChatPrompt(folderId, text, images);
 }
 
 // Send now, or queue it when the AI is still answering (used by the report button)
@@ -603,12 +641,19 @@ export function submitChatPrompt(folderId, text) {
   return true;
 }
 
+// Images dropped from Explorer onto this chat (file-drop.js) go to its composer tray
+export function attachDroppedFiles(folderId, paths) {
+  const inst = chatInstances[folderId];
+  if (!inst) return;
+  inst.images.addFiles(paths).then(() => inst.inputEl.focus());
+}
+
 // --- Input while the AI is answering: queued and sent in order when the turn ends ---
-function enqueuePrompt(inst, text) {
+function enqueuePrompt(inst, text, images = []) {
   const el = document.createElement('div');
   el.className = 'chat-row chat-row-user chat-row-queued';
-  el.innerHTML = `<div class="chat-bubble chat-bubble-user"><span class="chat-queue-tag">${escapeHtml(t('chatQueuedTag'))}</span>${userHtml(text)}</div><button class="chat-queue-remove" title="${escapeHtml(t('chatQueueRemove'))}">×</button>`;
-  const item = Object.freeze({ text, el });
+  el.innerHTML = `<div class="chat-bubble chat-bubble-user"><span class="chat-queue-tag">${escapeHtml(t('chatQueuedTag'))}</span>${userHtml(text)}${imagesHtml(images)}</div><button class="chat-queue-remove" title="${escapeHtml(t('chatQueueRemove'))}">×</button>`;
+  const item = Object.freeze({ text, images, el });
   el.querySelector('.chat-queue-remove').addEventListener('click', () => {
     inst.queue = inst.queue.filter((q) => q !== item);
     el.remove();
@@ -625,13 +670,14 @@ function sendNextQueued(folderId) {
   const [item, ...rest] = inst.queue;
   inst.queue = rest;
   item.el.remove();
-  sendChatPrompt(folderId, item.text);
+  sendChatPrompt(folderId, item.text, item.images);
 }
 
 // Stopped by the user: put the queued text back into the input instead of sending it
 function restoreQueueToInput(inst) {
   if (!inst.queue.length) return;
   const texts = inst.queue.map((q) => q.text);
+  inst.images.restore(inst.queue.flatMap((q) => q.images || []));
   inst.queue.forEach((q) => q.el.remove());
   inst.queue = [];
   const current = inst.inputEl.value.trim();
@@ -738,16 +784,17 @@ function cancelSide(folderId, inst) {
   inst.side = null;
 }
 
-export async function sendChatPrompt(folderId, text) {
+export async function sendChatPrompt(folderId, text, images = []) {
   const inst = chatInstances[folderId];
   const folder = getFolder(folderId);
   if (!inst || !folder || inst.isBusy) return false;
 
   // codex exec has no slash commands: expand custom prompts (~/.codex/prompts) here
-  const prompt = folder.cli === 'codex' ? (expandCommand(folder, text) || text) : text;
+  const expanded = folder.cli === 'codex' ? (expandCommand(folder, text) || text) : text;
+  const prompt = promptWithImages(folder.cli, expanded, images);
   updateFolder(folderId, { lastUsedAt: Date.now() }); // most recently used first in its group
 
-  addMessage(inst, { role: 'user', text });
+  addMessage(inst, { role: 'user', text, images });
   scrollToBottom(inst);
   inst.currentBubble = null;
   inst.cancelled = false;
@@ -764,6 +811,9 @@ export async function sendChatPrompt(folderId, text) {
     prompt,
     resumeId: inst.resumeId,
     permissionMode: getPermissionValue(folder),
+    // Browser panel next to this session: the CLI gets its Playwright MCP for this turn
+    browserSlot: browserSlotOf(folderId),
+    images: images.map((i) => i.path),
   });
 
   if (!res || !res.success) {
@@ -915,7 +965,10 @@ export function serializeChat(folderId) {
   return inst.messages
     .filter((m) => m.role !== 'system')
     .map((m) => {
-      if (m.role === 'user') return `### ${t('chatYou')}\n${m.text}`;
+      if (m.role === 'user') {
+        const images = (m.images || []).map((i) => `\n[image: ${i.name}]`).join('');
+        return `### ${t('chatYou')}\n${m.text}${images}`;
+      }
       if (m.role === 'assistant') return `### AI\n${m.text}`;
       if (m.role === 'btw') return `> btw: ${m.text}\n>\n${(m.answer || '').split('\n').map((l) => `> ${l}`).join('\n')}`;
       if (m.role === 'tool') return `> 🔧 ${m.name}${m.summary ? ' ' + m.summary : ''}${m.status === 'error' ? ' (error)' : ''}`;

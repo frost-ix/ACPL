@@ -96,11 +96,10 @@ export function getTerminalBufferText(folderId) {
 
 // --- Actions ---
 // Folder picker; focus goes back to the session afterwards
-async function pickTargetFolder(buttonId, folderId) {
+async function pickTargetFolder(folderId) {
   const selectedPath = await window.api.openFolder();
   if (!selectedPath) return null;
-  const btn = document.getElementById(buttonId);
-  if (btn) btn.blur();
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   const inst = termInstances[folderId];
   if (inst && inst.term) inst.term.focus();
   return selectedPath;
@@ -131,7 +130,7 @@ export async function exportConversationChatRaw() {
     alert(t('noContentToExtract'));
     return;
   }
-  const selectedPath = await pickTargetFolder('btn-extract-chat', folderId);
+  const selectedPath = await pickTargetFolder(folderId);
   if (!selectedPath) return;
 
   const res = await window.api.saveExportFile({
@@ -175,7 +174,7 @@ export async function exportConversationReportPDF() {
     alert(t('sessionNotActive'));
     return;
   }
-  const selectedPath = await pickTargetFolder('btn-export-report', folderId);
+  const selectedPath = await pickTargetFolder(folderId);
   if (!selectedPath) return;
   const promptText = await buildReportPrompt(folder, selectedPath);
 

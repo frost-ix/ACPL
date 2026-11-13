@@ -12,6 +12,7 @@ let data = deepFreeze({
   groups: [], // [{ id, name, collapsed }] in display order
   scanRoots: [], // root folders scanned for git repositories
   mergeSamePath: true, // one card per path
+  layout: { cells: {}, focused: null }, // session panes (layout-model.js), not persisted
 });
 
 let activeFolderId = null;
@@ -49,6 +50,10 @@ export const getScanRoots = () => data.scanRoots;
 export const setScanRoots = (roots) => commit({ scanRoots: [...roots] }).scanRoots;
 export const isMergeSamePath = () => data.mergeSamePath;
 export const setMergeSamePath = (on) => commit({ mergeSamePath: on !== false }).mergeSamePath;
+
+// --- Session panes ---
+export const getLayout = () => data.layout;
+export const setLayout = (layout) => commit({ layout }).layout;
 
 // --- Selection / theme ---
 export const getActiveFolderId = () => activeFolderId;

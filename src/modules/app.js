@@ -14,7 +14,6 @@ import { saveAllConfig } from './config.js';
 import { createTerminalInstance, fitAndResizeTerminal, debouncedFitAndResize, setupPtyListeners } from './terminal.js';
 import { setupChatListeners } from './chat.js';
 import { triggerManualUsageCheck, startUsageScheduler } from './usage.js';
-import { exportConversationChatRaw, exportConversationReportPDF } from './extract.js';
 import * as M from './folder-model.js';
 import { addOrSelectFolderByPath, refreshMissingPaths, refreshDiscovered } from './folders.js';
 import { openSwitcher, setupSwitcherShortcut } from './switcher.js';
@@ -26,13 +25,18 @@ import {
   toggleTheme,
   updateUILanguage,
   renderFolderCards,
-  renderSessionTabs,
+  renderSessionIndicators,
   renderUsageStatusBar,
   renderWelcomeManual,
   selectActiveFolder,
   closeFolderSessionConfirmed,
+  setConfirmModal,
   startNewGroupInput
 } from './ui.js';
+import { setupBrowserPanels } from './browser-pane.js';
+import { exportConversationChatRaw, exportConversationReportPDF } from './extract.js';
+import { setupPanes } from './panes.js';
+import { setupFileDrop } from './file-drop.js';
 
 const SIDEBAR_MIN = 260;
 const SIDEBAR_SNAP = 135;
@@ -129,15 +133,14 @@ async function saveConfigWithNotice() {
 
 function closeConfirmModal() {
   setPendingCloseFolderId(null);
-  const modal = document.getElementById('confirm-modal');
-  if (modal) modal.classList.add('hidden');
+  setConfirmModal(false);
 }
 
 // id -> click handler of the static buttons in index.html
 const BUTTONS = {
   'btn-theme-toggle': toggleTheme,
-  'btn-export-report': exportConversationReportPDF,
   'btn-extract-chat': exportConversationChatRaw,
+  'btn-export-report': exportConversationReportPDF,
   'btn-add-folder': addFolderFromPicker,
   'btn-new-group': startNewGroupInput,
   'btn-open-switcher': openSwitcher,
@@ -148,6 +151,9 @@ const BUTTONS = {
 
 document.addEventListener('DOMContentLoaded', async () => {
   setupBrowserGuard();
+  setupBrowserPanels();
+  setupPanes();
+  setupFileDrop();
   setupTitlebar();
   setupPtyListeners();
   setupChatListeners();
@@ -167,7 +173,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const sidebar = document.getElementById('sidebar');
   renderFolderCards();
-  renderSessionTabs();
+  renderSessionIndicators();
   initSidebarResizer(sidebar);
   initSidebarToggle(sidebar);
   renderWelcomeManual(); // nothing runs right after start

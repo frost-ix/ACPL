@@ -18,7 +18,7 @@ import {
   toggleArchived
 } from './folders.js';
 import { pinToggled } from './folder-model.js';
-import { renderFolderCards, renderSessionTabs, removeFolderCard } from './ui.js';
+import { renderFolderCards, renderSessionIndicators, removeFolderCard } from './ui.js';
 import { createOverlay, onActions } from './dom.js';
 import { escapeHtml, formatShortDate } from './util.js';
 
@@ -125,7 +125,7 @@ function render() {
 
 // data-field -> how a change is applied (text fields on 'input', the rest on 'change')
 const FIELD_HANDLERS = {
-  alias: { on: 'input', apply: (id, el) => { patchFolder(id, { alias: el.value }); renderSessionTabs(); } },
+  alias: { on: 'input', apply: (id, el) => { patchFolder(id, { alias: el.value }); renderSessionIndicators(); } },
   customCommand: { on: 'input', apply: (id, el) => patchFolder(id, { customCommand: el.value }) },
   groupId: { on: 'change', apply: (id, el) => setFolderGroup(id, el.value || null) },
   // view mode / custom command / saved conversation depend on the CLI
@@ -149,7 +149,7 @@ function ensureDialog() {
     onClose: () => {
       currentId = null;
       renderFolderCards();
-      renderSessionTabs();
+      renderSessionIndicators();
     },
   });
   dialog.card.addEventListener('input', onField);
