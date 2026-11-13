@@ -10,7 +10,7 @@ import { getLayout, setLayout, getFolder, getActiveFolderId, chatInstances, term
 import * as P from './layout-model.js';
 import { displayName } from './folder-model.js';
 import { escapeHtml, debounce } from './util.js';
-import { onActions, beginPointerDrag, notifyOverlay } from './dom.js';
+import { onActions, beginPointerDrag, notifyOverlay, trackPointer } from './dom.js';
 import { syncBrowsers, setBrowsersHidden, browserUrl, onBrowserUrl, navigateBrowser, browserHistory } from './browser-pane.js';
 import { fitAndResizeTerminal } from './terminal.js';
 import { focusChatInput } from './chat.js';
@@ -255,23 +255,30 @@ function applySizes(grid, rows) {
 
 const pct = (v) => `${(v * 100).toFixed(3)}%`;
 
+// One handle element per axis, created once and only re-positioned afterwards
+function splitterEl(grid, axis) {
+  let handle = grid.querySelector(`.pane-split-${axis}`);
+  if (!handle) {
+    handle = document.createElement('div');
+    handle.className = `pane-split pane-split-${axis}`;
+    handle.addEventListener('mousedown', (e) => startResize(e, axis));
+    grid.appendChild(handle);
+  }
+  return handle;
+}
+
 function renderSplitters(grid, layout) {
-  grid.querySelectorAll('.pane-split').forEach((el) => el.remove());
   const { col, row } = P.splitHandles(layout, sizes);
-  if (col) {
-    const handle = document.createElement('div');
-    handle.className = 'pane-split pane-split-col';
-    Object.assign(handle.style, { left: pct(col.x), top: pct(col.y), height: pct(col.h) });
-    handle.addEventListener('mousedown', (e) => startResize(e, 'col'));
-    grid.appendChild(handle);
-  }
-  if (row) {
-    const handle = document.createElement('div');
-    handle.className = 'pane-split pane-split-row';
-    handle.style.top = pct(row.y);
-    handle.addEventListener('mousedown', (e) => startResize(e, 'row'));
-    grid.appendChild(handle);
-  }
+  const place = (axis, box, style) => {
+    if (!box) {
+      const stale = grid.querySelector(`.pane-split-${axis}`);
+      if (stale) stale.remove();
+      return;
+    }
+    Object.assign(splitterEl(grid, axis).style, style(box));
+  };
+  place('col', col, (b) => ({ left: pct(b.x), top: pct(b.y), height: pct(b.h) }));
+  place('row', row, (b) => ({ top: pct(b.y) }));
 }
 
 // Native browser panels would swallow the pointer while it crosses them: hidden meanwhile
@@ -281,22 +288,21 @@ function startResize(e, axis) {
   const grid = gridEl();
   const rect = grid.getBoundingClientRect();
   const rows = P.gridCells(getLayout()).rows;
+  const bodyClass = axis === 'col' ? 'pane-resizing-col' : 'pane-resizing-row';
   notifyOverlay('resize', true);
-  document.body.classList.add(axis === 'col' ? 'pane-resizing-col' : 'pane-resizing-row');
-  const onMove = (ev) => {
-    const share = axis === 'col' ? (ev.clientX - rect.left) / rect.width : (ev.clientY - rect.top) / rect.height;
-    sizes = Object.freeze({ ...sizes, [axis]: P.clampRatio(share) });
-    applySizes(grid, rows);
-    renderSplitters(grid, getLayout());
-  };
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.body.classList.remove('pane-resizing-col', 'pane-resizing-row');
-    notifyOverlay('resize', false);
-  };
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', onUp);
+  document.body.classList.add(bodyClass);
+  trackPointer({
+    onMove: (ev) => {
+      const share = axis === 'col' ? (ev.clientX - rect.left) / rect.width : (ev.clientY - rect.top) / rect.height;
+      sizes = Object.freeze({ ...sizes, [axis]: P.clampRatio(share) });
+      applySizes(grid, rows);
+      renderSplitters(grid, getLayout());
+    },
+    onEnd: () => {
+      document.body.classList.remove(bodyClass);
+      notifyOverlay('resize', false);
+    },
+  });
 }
 
 // Show a running session: focus it if placed, else it takes the focused cell

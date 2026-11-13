@@ -104,6 +104,18 @@ export function createOverlay({ overlayClass, cardClass, onClose }) {
  */
 const DRAG_THRESHOLD_PX = 6;
 
+// Follows the pointer until the button is released (drags, splitters, sidebar width)
+export function trackPointer({ onMove, onEnd = () => {} }) {
+  const move = (ev) => onMove(ev);
+  const up = (ev) => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    onEnd(ev);
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+}
+
 export function beginPointerDrag(e, { label, resolve, highlight = () => {}, onStart = () => {}, onEnd = () => {}, drop }) {
   if (e.button !== 0) return;
   const start = { x: e.clientX, y: e.clientY };
@@ -131,8 +143,6 @@ export function beginPointerDrag(e, { label, resolve, highlight = () => {}, onSt
     setTarget(resolve(document.elementFromPoint(ev.clientX, ev.clientY)));
   };
   const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
     if (!ghost) return;
     ghost.remove();
     document.body.classList.remove('folder-dragging');
@@ -142,8 +152,7 @@ export function beginPointerDrag(e, { label, resolve, highlight = () => {}, onSt
     notifyOverlay('drag', false);
     if (dropped) drop(dropped);
   };
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', onUp);
+  trackPointer({ onMove, onEnd: onUp });
 }
 
 export const isNearBottom = (el, slack = 80) => el.scrollHeight - el.scrollTop - el.clientHeight < slack;

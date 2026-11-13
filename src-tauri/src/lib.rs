@@ -2,7 +2,7 @@ use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -398,13 +398,20 @@ fn cpu_percent(prev: (u64, u64), cur: (u64, u64)) -> Option<f32> {
     (total > 0).then(|| (100.0 * (total.saturating_sub(idle)) as f64 / total as f64).clamp(0.0, 100.0) as f32)
 }
 
-/// Pure: `root` and every process below it, from (pid, parent pid) pairs
+/// Pure: `root` and every process below it, from (pid, parent pid) pairs.
+/// One pass builds a parent -> children index, then a BFS walks it (O(n) instead of O(n²)).
 fn process_tree(root: u32, pairs: &[(u32, u32)]) -> Vec<u32> {
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for &(pid, ppid) in pairs.iter().filter(|(pid, ppid)| pid != ppid) {
+        children.entry(ppid).or_default().push(pid);
+    }
+    let mut seen: HashSet<u32> = HashSet::from([root]);
     let mut tree = vec![root];
     let mut i = 0;
     while i < tree.len() {
-        let parent = tree[i];
-        tree.extend(pairs.iter().filter(|(pid, ppid)| *ppid == parent && *pid != parent && !tree.contains(pid)).map(|(pid, _)| *pid).collect::<Vec<_>>());
+        let kids = children.get(&tree[i]).map(Vec::as_slice).unwrap_or_default();
+        let fresh: Vec<u32> = kids.iter().copied().filter(|pid| seen.insert(*pid)).collect();
+        tree.extend(fresh);
         i += 1;
     }
     tree
@@ -1664,19 +1671,36 @@ fn browser_mcp_command(port: u16) -> Vec<String> {
         .collect()
 }
 
-/// Extra CLI arguments that hand the browser panel of `slot` to the session's AI.
+fn browser_mcp_config_path(port: u16) -> PathBuf {
+    std::env::temp_dir().join(format!("acpl_browser_mcp_{}.json", port))
+}
+
+/// Pure: MCP config file content for claude (--mcp-config)
+fn browser_mcp_config(port: u16) -> Value {
+    json!({ "mcpServers": { BROWSER_MCP_NAME: { "command": "cmd", "args": browser_mcp_command(port) } } })
+}
+
+/// The only side effect of a browser launch: claude reads its MCP server from a file
+fn write_browser_mcp_config(cli: &str, slot: u8) -> Result<(), String> {
+    let port = browser_port(slot).ok_or("Invalid browser slot")?;
+    if cli != "claude" {
+        return Ok(());
+    }
+    fs::write(browser_mcp_config_path(port), browser_mcp_config(port).to_string())
+        .map_err(|e| format!("Failed to write MCP config: {}", e))
+}
+
+/// Pure: extra CLI arguments that hand the browser panel of `slot` to the session's AI
+/// (claude's config file is written by write_browser_mcp_config).
 /// The result is inserted into a PowerShell command line; every part is fixed or a number.
 fn browser_cli_args(cli: &str, slot: u8) -> Result<String, String> {
     let port = browser_port(slot).ok_or("Invalid browser slot")?;
     let args = browser_mcp_command(port);
     match cli {
         "claude" => {
-            let path = std::env::temp_dir().join(format!("acpl_browser_mcp_{}.json", port));
-            let config = json!({ "mcpServers": { BROWSER_MCP_NAME: { "command": "cmd", "args": args } } });
-            fs::write(&path, config.to_string()).map_err(|e| format!("Failed to write MCP config: {}", e))?;
             Ok(format!(
                 " --mcp-config {} --allowedTools mcp__{} --append-system-prompt {}",
-                ps_single_quote(&path.to_string_lossy()),
+                ps_single_quote(&browser_mcp_config_path(port).to_string_lossy()),
                 BROWSER_MCP_NAME,
                 ps_single_quote(BROWSER_PROMPT)
             ))
@@ -1825,7 +1849,9 @@ async fn browser_close(app: AppHandle, slot: u8) -> Result<(), String> {
 /// CLI arguments for a terminal launch with the panel of `slot` (chat mode adds them itself)
 #[tauri::command]
 fn browser_launch_args(cli: String, slot: u8) -> Result<String, String> {
-    browser_cli_args(&cli, slot)
+    let args = browser_cli_args(&cli, slot)?;
+    write_browser_mcp_config(&cli, slot)?;
+    Ok(args)
 }
 
 // ---------------------------------------------------------------------------
@@ -2100,6 +2126,9 @@ fn start_chat(app: AppHandle, state: &AppState, payload: ChatSendPayload) -> Res
         return Err("A response is already in progress".into());
     }
     let cli_cmd = build_chat_cli_command(&payload)?;
+    if let Some(slot) = payload.browser_slot.filter(|_| !payload.side) {
+        write_browser_mcp_config(&payload.cli, slot)?;
+    }
 
     // Hand the prompt over through a UTF-8 temp file to avoid any quoting / encoding issues.
     let safe_sid: String = session_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();

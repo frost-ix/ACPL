@@ -37,6 +37,7 @@ import { setupBrowserPanels } from './browser-pane.js';
 import { exportConversationChatRaw, exportConversationReportPDF } from './extract.js';
 import { setupPanes } from './panes.js';
 import { setupFileDrop } from './file-drop.js';
+import { trackPointer } from './dom.js';
 
 const SIDEBAR_MIN = 260;
 const SIDEBAR_SNAP = 135;
@@ -73,33 +74,33 @@ const setSidebarToggleIcon = (sidebar) => {
 function initSidebarResizer(sidebar) {
   const resizer = document.getElementById('sidebar-resizer');
   if (!resizer) return;
-  let resizing = false;
-  let frame = null;
-
   const setDragging = (on) => {
-    resizing = on;
     resizer.classList.toggle('resizing', on);
     sidebar.classList.toggle('is-resizing', on);
     document.body.style.cursor = on ? 'col-resize' : '';
     document.body.style.userSelect = on ? 'none' : '';
   };
 
-  resizer.addEventListener('mousedown', () => setDragging(true));
-  document.addEventListener('mousemove', (e) => {
-    if (!resizing) return;
-    if (frame) cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => {
-      const collapse = e.clientX <= SIDEBAR_SNAP;
-      sidebar.classList.toggle('collapsed', collapse);
-      sidebar.style.width = collapse ? '' : `${Math.max(SIDEBAR_MIN, Math.min(e.clientX, window.innerWidth / 3))}px`;
-      setSidebarToggleIcon(sidebar);
+  resizer.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    let frame = null;
+    setDragging(true);
+    trackPointer({
+      onMove: (ev) => {
+        if (frame) cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          const collapse = ev.clientX <= SIDEBAR_SNAP;
+          sidebar.classList.toggle('collapsed', collapse);
+          sidebar.style.width = collapse ? '' : `${Math.max(SIDEBAR_MIN, Math.min(ev.clientX, window.innerWidth / 3))}px`;
+          setSidebarToggleIcon(sidebar);
+        });
+      },
+      onEnd: () => {
+        if (frame) cancelAnimationFrame(frame);
+        setDragging(false);
+        refitActiveTerminal();
+      },
     });
-  });
-  document.addEventListener('mouseup', () => {
-    if (!resizing) return;
-    if (frame) cancelAnimationFrame(frame);
-    setDragging(false);
-    refitActiveTerminal();
   });
 }
 

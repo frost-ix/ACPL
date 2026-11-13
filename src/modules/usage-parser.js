@@ -81,10 +81,19 @@ const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', '
 const UNIT_MS = { d: 86400000, h: 3600000, m: 60000 };
 const MINUTE_MS = 60000;
 
+// Building an Intl formatter is costly: one per zone, reused (memo only, results stay pure)
+const formatters = new Map();
+const formatterFor = (timeZone) => {
+  if (!formatters.has(timeZone)) {
+    formatters.set(timeZone, new Intl.DateTimeFormat('en-US', {
+      timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric',
+    }));
+  }
+  return formatters.get(timeZone);
+};
+
 const zoneParts = (ms, timeZone) => {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric',
-  }).formatToParts(ms);
+  const parts = formatterFor(timeZone).formatToParts(ms);
   const get = (type) => Number((parts.find((p) => p.type === type) || {}).value);
   return { year: get('year'), month: get('month') - 1, day: get('day'), hour: get('hour') % 24, minute: get('minute') };
 };

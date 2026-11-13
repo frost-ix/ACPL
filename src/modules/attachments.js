@@ -29,6 +29,27 @@ const readAsDataUrl = (blob) => new Promise((resolve, reject) => {
   reader.readAsDataURL(blob);
 });
 
+// Thumbnails live in memory and in the chat history, so they are scaled down (the AI gets the
+// full file). Small images and undecodable ones are kept as they are.
+const THUMB_MAX_PX = 320;
+const thumbScale =(w, h, max = THUMB_MAX_PX) => Math.min(1, max / Math.max(w, h, 1));
+
+const thumbnailOf = (dataUrl) => new Promise((resolve) => {
+  if (!dataUrl) return resolve('');
+  const img = new Image();
+  img.onload = () => {
+    const scale = thumbScale(img.naturalWidth, img.naturalHeight);
+    if (scale === 1) return resolve(dataUrl);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+    resolve(canvas.toDataURL('image/webp', 0.85));
+  };
+  img.onerror = () => resolve(dataUrl);
+  img.src = dataUrl;
+});
+
 /**
  * Image tray of one chat composer. inst.attachments is an immutable list of
  * { path, name, preview }. Returns { addFiles(paths), take() }.
@@ -56,9 +77,9 @@ export function attachImageTray(inst) {
   };
 
   const addBlob = async (blob, name) => {
-    const preview = await readAsDataUrl(blob);
-    const path = await window.api.saveAttachment(name, preview);
-    if (path) add({ path, name, preview });
+    const data = await readAsDataUrl(blob);
+    const path = await window.api.saveAttachment(name, data);
+    if (path) add({ path, name, preview: await thumbnailOf(data) });
     else window.alert(t('attachFailed'));
   };
 
@@ -68,7 +89,7 @@ export function attachImageTray(inst) {
       window.alert(`${t('attachFailed')}\n${source}`);
       return;
     }
-    add({ path, name: basename(source), preview: (await window.api.attachmentPreview(path)) || '' });
+    add({ path, name: basename(source), preview: await thumbnailOf(await window.api.attachmentPreview(path)) });
   };
 
   tray.addEventListener('click', (e) => {

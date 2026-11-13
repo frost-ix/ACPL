@@ -17,13 +17,19 @@ const elementAt = (position) => (position
 
 const findId = (registry, container) => Object.keys(registry).find((id) => registry[id].container === container) || null;
 
+// { kind, id, el } of the session whose container is (or holds) `el`, or null
+const sessionIn = (el, kind, selector, registry) => {
+  const container = el && el.closest(selector);
+  const id = container && findId(registry, container);
+  return id ? { kind, id, el: container } : null;
+};
+
 // { kind: 'chat' | 'terminal', id, el } of the session under the pointer (or the current one)
 function sessionAt(position) {
   const el = elementAt(position);
-  const chat = el && el.closest('.chat-instance');
-  if (chat) return { kind: 'chat', id: findId(chatInstances, chat), el: chat };
-  const term = el && el.closest('.terminal-instance');
-  if (term && findId(termInstances, term)) return { kind: 'terminal', id: findId(termInstances, term), el: term };
+  const under = sessionIn(el, 'chat', '.chat-instance', chatInstances)
+    || sessionIn(el, 'terminal', '.terminal-instance', termInstances);
+  if (under) return under;
   const current = getFolder(getActiveFolderId());
   if (!current || !current.isActive) return null;
   return current.runningMode === 'chat' && chatInstances[current.id]
@@ -31,16 +37,23 @@ function sessionAt(position) {
     : { kind: 'terminal', id: current.id, el: termInstances[current.id] && termInstances[current.id].container };
 }
 
-const clearHover = () => document.querySelectorAll(`.${HOVER_CLASS}`).forEach((el) => el.classList.remove(HOVER_CLASS));
+// Drag-over fires continuously: only the highlighted element is touched, and only on change
+let hovered = null;
+const setHover = (el) => {
+  if (el === hovered) return;
+  if (hovered) hovered.classList.remove(HOVER_CLASS);
+  hovered = el || null;
+  if (hovered) hovered.classList.add(HOVER_CLASS);
+};
+const clearHover = () => setHover(null);
 
 // PowerShell-safe quoting for paths typed into a terminal session
 const quotePath = (p) => (/[\s']/.test(p) ? `'${p.replace(/'/g, "''")}'` : p);
 
 export function setupFileDrop() {
   window.api.onFileDragOver((payload) => {
-    clearHover();
     const target = sessionAt(payload && payload.position);
-    if (target && target.el) target.el.classList.add(HOVER_CLASS);
+    setHover(target && target.el);
   });
   window.api.onFileDragLeave(clearHover);
   window.api.onFileDrop((payload) => {
